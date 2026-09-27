@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Depends, HTTPException
+import os
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
@@ -19,6 +20,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def verify_api_key(x_api_key: str | None = Header(default=None)):
+    expected_key = os.getenv("MAKE_API_KEY")
+    if not expected_key or x_api_key != expected_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    return True
+
 @app.get("/")
 def read_root():
     return {"message": "Job Application Autopilot API is running"}
@@ -35,7 +42,7 @@ def read_job(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
     return db_job
 
-@app.post("/api/jobs", response_model=schemas.JobResponse)
+@app.post("/api/jobs", response_model=schemas.JobResponse, dependencies=[Depends(verify_api_key)])
 def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
     return crud.create_job(db=db, job=job)
 
