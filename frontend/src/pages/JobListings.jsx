@@ -9,6 +9,7 @@ const JobListings = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterScore, setFilterScore] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [filterExp, setFilterExp] = useState('all');
 
   useEffect(() => {
     const loadJobs = async () => {
@@ -41,8 +42,16 @@ const JobListings = () => {
                          (filterScore === 'medium' && job.score >= 5 && job.score < 8) || 
                          (filterScore === 'low' && job.score < 5);
     const matchesStatus = filterStatus === 'all' || job.status === filterStatus;
+    const expLow = (job.experience || '').toLowerCase();
+    const matchesExp = filterExp === 'all' ||
+                       (filterExp === 'fresher' && (
+                         !job.experience || expLow.includes('fresh') || expLow.includes('entry') || expLow.includes('intern') || expLow.includes('0-') || expLow.includes('0 to') || expLow.includes('1 year') || expLow.includes('1 yr')
+                       )) ||
+                       (filterExp === 'experienced' && (
+                         expLow.includes('2+') || expLow.includes('3') || expLow.includes('4') || expLow.includes('5')
+                       ));
     
-    return matchesSearch && matchesScore && matchesStatus;
+    return matchesSearch && matchesScore && matchesStatus && matchesExp;
   });
 
   if (loading) {
@@ -82,6 +91,16 @@ const JobListings = () => {
           <option value="high">High Match (&ge; 8)</option>
           <option value="medium">Medium Match (5 - 7.9)</option>
           <option value="low">Low Match (&lt; 5)</option>
+        </select>
+        <select 
+          className="form-control" 
+          style={{ width: 'auto' }} 
+          value={filterExp} 
+          onChange={e => setFilterExp(e.target.value)}
+        >
+          <option value="all">All Experience</option>
+          <option value="fresher">Fresher &amp; Entry (0-1 yrs)</option>
+          <option value="experienced">Experienced (2+ yrs)</option>
         </select>
         <select 
           className="form-control" 
