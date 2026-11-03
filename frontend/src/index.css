@@ -358,3 +358,53 @@ body {
 .score-high { color: var(--success); }
 .score-medium { color: var(--warning); }
 .score-low { color: var(--danger); }
+
+/* Resume Manager */
+.resume-drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.resume-drop-zone:hover,
+.resume-drop-zone.dragging {
+  border-color: var(--primary);
+  background-color: rgba(79, 70, 229, 0.04);
+}
+
+.resume-drop-zone.has-file {
+  border-color: var(--success);
+  background-color: rgba(16, 185, 129, 0.04);
+}
+
+/* Inline spinner sizing override */
+.spinner-sm {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
+
+.btn-danger {
+  background-color: rgba(239, 68, 68, 0.08);
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.btn-danger:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+
+/* Code block inside info cards */
+.code-block {
+  background: var(--sidebar-bg);
+  color: #e2e8f0;
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  font-family: monospace;
+  font-size: 0.82rem;
+  overflow-x: auto;
+}
+
