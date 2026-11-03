@@ -200,11 +200,25 @@ The FastAPI backend provides REST endpoints for job management.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| GET | `/api/jobs` | Retrieve job listings |
-| POST | `/api/jobs` | Create a job record (API key required) |
-| GET | `/api/jobs/{id}` | Retrieve a specific job |
-| PUT | `/api/jobs/{id}` | Update a job record |
-| DELETE | `/api/jobs/{id}` | Delete a job record |
+| GET | `/api/jobs` | Retrieve job listings with score and status filters |
+| POST | `/api/jobs` | Ingest qualified job (API key, duplicate detection & experience guard) |
+| GET | `/api/jobs/{id}` | Retrieve specific job details |
+| PUT | `/api/jobs/{id}` | Update job status ('Applied', 'Interview', etc.) |
+| DELETE | `/api/jobs/{id}` | Delete job record |
+| GET | `/api/make/context` | **Make.com:** Retrieve active role, resume text, and filter criteria (API key required) |
+| GET | `/api/make/resume` | **Make.com:** Retrieve resume text for a specific role (API key required) |
+| GET | `/api/resumes` | List all uploaded resumes across all roles |
+| POST | `/api/resumes` | Upload new PDF resume and associate with target role |
+| PUT | `/api/resumes/{id}/activate` | Select active resume for a specific role |
+| PUT | `/api/resumes/{id}/replace` | Replace uploaded PDF file for an existing resume |
+| GET | `/api/resumes/{id}/text` | Preview plain text extracted from a resume PDF |
+| DELETE | `/api/resumes/{id}` | Delete a resume and its PDF from disk |
+| GET | `/api/settings` | Retrieve unified job search & automation settings |
+| PUT | `/api/settings` | Update settings (roles, min score, locations, webhook URL) |
+| POST | `/api/automation/trigger` | Dispatch one-click "Find New Jobs" trigger to Make.com Webhook |
+
+For full automation scenario architecture and configuration, see [Make.com Automation Guide](docs/make_automation_guide.md).
+For hosting and cloud persistence guidelines, see [Production Deployment Guide](docs/deployment.md).
 
 ### Example: Create a Job
 

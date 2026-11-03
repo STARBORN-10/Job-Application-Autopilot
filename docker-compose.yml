@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: job_autopilot_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MAKE_API_KEY=${MAKE_API_KEY:-dev_make_key_secret}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./jobs.db}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      - MAKE_WEBHOOK_URL=${MAKE_WEBHOOK_URL:-}
+    volumes:
+      - backend_uploads:/app/uploads
+      - backend_db:/app
+
+volumes:
+  backend_uploads:
+  backend_db:
