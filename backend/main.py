@@ -18,7 +18,7 @@ import PyPDF2
 import models, schemas, crud
 from database import SessionLocal, engine, get_db
 
-load_dotenv()
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
 # ---------------------------------------------------------------------------
 # DB table creation
