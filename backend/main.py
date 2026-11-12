@@ -185,13 +185,10 @@ def read_job(job_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/jobs", response_model=schemas.JobResponse, dependencies=[Depends(verify_api_key)])
 def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
-    # 1. Duplicate job detection (URL primary match, Title+Company fallback)
-    duplicate = crud.find_duplicate_job(db, job)
-    if duplicate:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Duplicate job: '{job.title}' at '{job.company}' already exists (ID: {duplicate.id}).",
-        )
+# 1. Duplicate job detection (URL primary match, Title+Company fallback)
+duplicate = crud.find_duplicate_job(db, job)
+if duplicate:
+    return duplicate
 
     # 2. Experience filter enforcement
     filter_settings = crud.get_experience_filter_settings(db)
