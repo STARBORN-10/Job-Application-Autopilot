@@ -185,7 +185,7 @@ def read_job(job_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/jobs", response_model=schemas.JobResponse, dependencies=[Depends(verify_api_key)])
 def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
-<<    # 1. Duplicate job detection (URL primary match, Title+Company fallback)
+    # 1. Duplicate job detection (URL primary match, Title+Company fallback)
     duplicate = crud.find_duplicate_job(db, job)
     if duplicate:
         return duplicate
