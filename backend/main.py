@@ -7,7 +7,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Form, Query
+from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Form, Query, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -17,6 +17,7 @@ import PyPDF2
 
 import models, schemas, crud
 from database import SessionLocal, engine, get_db
+from services.pipeline import run_automation_pipeline
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
@@ -488,42 +489,14 @@ def update_experience_filter(payload: schemas.ExperienceFilterSettings, db: Sess
 
 
 @app.post("/api/automation/trigger", response_model=schemas.AutomationTriggerResponse)
-def trigger_automation(db: Session = Depends(get_db)):
+def trigger_automation(background_tasks: BackgroundTasks):
     """
-    Trigger the configured Make.com webhook to find new jobs.
-    Passes the current active role and matching preferences in the payload.
+    Trigger the native Python automation pipeline in the background.
     """
-    settings = crud.get_general_settings(db)
-    webhook_url = settings.make_webhook_url or os.getenv("MAKE_WEBHOOK_URL", "")
-
-    if not webhook_url or not webhook_url.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Make.com Webhook URL is not configured. Please add your webhook URL in Settings.",
-        )
-
-    context_payload = {
-        "active_role": settings.active_role,
-        "max_years_experience": settings.max_years_experience,
-        "filter_enabled": settings.filter_enabled,
-        "min_match_score": settings.min_match_score,
-        "trigger_source": "dashboard",
-    }
-
-    try:
-        resp = httpx.post(webhook_url.strip(), json=context_payload, timeout=10.0)
-        if resp.status_code >= 400:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Make.com webhook returned HTTP status {resp.status_code}: {resp.text[:200]}",
-            )
-        return schemas.AutomationTriggerResponse(
-            status="success",
-            message=f"Job search triggered successfully for '{settings.active_role}'! New matching opportunities will appear on your dashboard.",
-            details={"active_role": settings.active_role, "status_code": resp.status_code},
-        )
-    except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=504,
-            detail=f"Failed to connect to Make.com webhook: {str(exc)}",
-        )
+    # Start the pipeline as a background task. The pipeline will manage its own DB session if needed.
+    background_tasks.add_task(run_automation_pipeline)
+    return schemas.AutomationTriggerResponse(
+        status="started",
+        message="Automation pipeline started.",
+        details={},
+    )
