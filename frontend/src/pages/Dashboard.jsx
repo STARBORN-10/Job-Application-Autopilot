@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { fetchJobs, triggerAutomation, fetchGeneralSettings } from '../api';
+import React, { useEffect, useRef, useState } from 'react';
+import { fetchJobs, triggerAutomation, fetchAutomationStatus, fetchGeneralSettings } from '../api';
 import { Briefcase, CheckCircle, Clock, Star, Target, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -10,6 +10,7 @@ const Dashboard = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [triggerAlert, setTriggerAlert] = useState(null);
+  const mountedRef = useRef(true);
 
   const loadData = async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -30,24 +31,42 @@ const Dashboard = () => {
 
   useEffect(() => {
     loadData();
+    return () => { mountedRef.current = false; };
   }, []);
 
   const handleTriggerAutomation = async () => {
     setTriggering(true);
     setTriggerAlert(null);
     try {
-      const res = await triggerAutomation();
-      setTriggerAlert({
-        type: 'success',
-        message: res.message || 'Make.com job search triggered! Fresh matching opportunities will appear as they are processed.',
-      });
-      // Auto reload after 4 seconds
-      setTimeout(() => loadData(true), 4000);
+      // Remember the last finished run so we can tell when a *new* one completes.
+      const before = (await fetchAutomationStatus().catch(() => null))?.finished_at ?? null;
+      await triggerAutomation();
+
+      // Poll until the pipeline finishes (max ~10 minutes).
+      let status = null;
+      for (let i = 0; i < 300 && mountedRef.current; i++) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        status = await fetchAutomationStatus().catch(() => null);
+        if (status && !status.running && status.finished_at !== before) break;
+      }
+      if (!mountedRef.current) return;
+
+      const run = status?.last_run;
+      if (run?.status === 'success') {
+        setTriggerAlert({ type: 'success', message: run.message });
+      } else {
+        const msg = run?.message || 'Automation did not finish in time. Check back shortly.';
+        setTriggerAlert({
+          type: 'error',
+          message: msg,
+          needsConfig: /resume/i.test(msg) || /API key|not set|configur/i.test(msg),
+        });
+      }
+      await loadData(true);
     } catch (err) {
       setTriggerAlert({
         type: 'error',
-        message: err.message || 'Failed to trigger Make.com webhook.',
-        needsConfig: err.message?.includes('not configured'),
+        message: err.message || 'Failed to start the automation pipeline.',
       });
     } finally {
       setTriggering(false);
@@ -97,7 +116,7 @@ const Dashboard = () => {
             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', boxShadow: '0 2px 8px rgba(79, 70, 229, 0.25)' }}
           >
             {triggering ? <span className="spinner" style={{ width: 15, height: 15, borderWidth: 2 }} /> : <Sparkles size={16} />}
-            {triggering ? 'Triggering Make.com…' : 'Find New Jobs'}
+            {triggering ? 'Searching for jobs…' : 'Find New Jobs'}
           </button>
         </div>
       </div>

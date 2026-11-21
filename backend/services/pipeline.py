@@ -15,6 +15,7 @@ Orchestrates end-to-end automated job discovery:
 import re
 import logging
 import threading
+import datetime
 from typing import Optional, Dict, Any, List
 
 try:
@@ -24,6 +25,7 @@ try:
     from services import jsearch_service
     from services import ai_service
     from services import notification_service
+    from services.retry import retry_call
 except ImportError:
     from backend import crud
     from backend import schemas
@@ -31,9 +33,16 @@ except ImportError:
     from backend.services import jsearch_service
     from backend.services import ai_service
     from backend.services import notification_service
+    from backend.services.retry import retry_call
 
 logger = logging.getLogger("pipeline_orchestrator")
 logger.setLevel(logging.INFO)
+
+# Transient failures worth retrying (timeouts, rate limits, malformed AI output).
+# Auth/config/validation errors are NOT retried - they cannot succeed on a retry.
+_JSEARCH_TRANSIENT = (jsearch_service.JSearchNetworkError, jsearch_service.JSearchRateLimitError)
+_AI_TRANSIENT = (ai_service.AITimeoutError, ai_service.AIRateLimitError, ai_service.AIResponseFormatError)
+_TELEGRAM_TRANSIENT = (notification_service.TelegramNetworkError, notification_service.TelegramRateLimitError)
 
 # Global execution lock to prevent overlapping runs
 _pipeline_lock = threading.Lock()
@@ -112,7 +121,7 @@ def extract_minimum_experience_years(exp_str: Optional[str]) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # Pipeline Orchestrator Core
 # ---------------------------------------------------------------------------
-def run_automation_pipeline(
+def _execute_pipeline(
     db_session: Optional[Any] = None,
     session_factory=SessionLocal,
     jsearch_client: Optional[Any] = None,
@@ -172,9 +181,10 @@ def run_automation_pipeline(
     managed_session = False
 
     try:
-    if db is None:
-        db = session_factory()
-        managed_session = True
+        if db is None:
+            db = session_factory()
+            managed_session = True
+
         # 3. Retrieve settings and active profile
         settings = crud.get_general_settings(db)
         active_role = settings.active_role or "AI/ML Engineer"
@@ -200,11 +210,15 @@ def run_automation_pipeline(
 
         # 5. Fetch jobs from JSearch
         try:
-            fetched_jobs = jsearch_service.fetch_jobs(
-                active_role=active_role,
-                preferred_locations=preferred_locations,
-                num_pages=num_pages,
-                client=jsearch_client,
+            fetched_jobs = retry_call(
+                lambda: jsearch_service.fetch_jobs(
+                    active_role=active_role,
+                    preferred_locations=preferred_locations,
+                    num_pages=num_pages,
+                    client=jsearch_client,
+                ),
+                retry_on=_JSEARCH_TRANSIENT,
+                label="JSearch fetch",
             )
         except Exception as j_exc:
             msg = f"Job discovery failed: {j_exc}"
@@ -260,14 +274,18 @@ def run_automation_pipeline(
                 # Step C: Gemini AI Match Evaluation & Cover Letter Generation
                 # -----------------------------------------------------------
                 logger.info(f"Calling Gemini to evaluate: '{job_title}' at '{job_company}'")
-                eval_result = ai_service.evaluate_job(
-                    job_title=job_title,
-                    company=job_company,
-                    job_description=job.description or "",
-                    resume_text=resume_text,
-                    active_role=active_role,
-                    max_years_experience=max_years_experience,
-                    client=ai_client,
+                eval_result = retry_call(
+                    lambda: ai_service.evaluate_job(
+                        job_title=job_title,
+                        company=job_company,
+                        job_description=job.description or "",
+                        resume_text=resume_text,
+                        active_role=active_role,
+                        max_years_experience=max_years_experience,
+                        client=ai_client,
+                    ),
+                    retry_on=_AI_TRANSIENT,
+                    label=f"Gemini evaluation ({job_title})",
                 )
                 summary["ai_evaluated"] += 1
 
@@ -304,15 +322,19 @@ def run_automation_pipeline(
                 # -----------------------------------------------------------
                 notified = False
                 try:
-                    notification_service.send_job_alert(
-                        title=saved_job.title,
-                        company=saved_job.company,
-                        score=saved_job.score,
-                        match_reason=saved_job.match_reason,
-                        url=saved_job.url,
-                        experience=saved_job.experience,
-                        location=saved_job.location,
-                        client=telegram_client,
+                    retry_call(
+                        lambda: notification_service.send_job_alert(
+                            title=saved_job.title,
+                            company=saved_job.company,
+                            score=saved_job.score,
+                            match_reason=saved_job.match_reason,
+                            url=saved_job.url,
+                            experience=saved_job.experience,
+                            location=saved_job.location,
+                            client=telegram_client,
+                        ),
+                        retry_on=_TELEGRAM_TRANSIENT,
+                        label="Telegram alert",
                     )
                     summary["notified"] += 1
                     notified = True
@@ -359,3 +381,60 @@ def run_automation_pipeline(
                     logger.exception("Failed to close pipeline database session.")
         finally:
             _pipeline_lock.release()
+
+
+# ---------------------------------------------------------------------------
+# Run status tracking (exposed via GET /api/automation/status)
+# ---------------------------------------------------------------------------
+_status_lock = threading.Lock()
+_run_state: Dict[str, Any] = {"started_at": None, "finished_at": None, "last_run": None}
+
+
+def _now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def get_pipeline_status() -> Dict[str, Any]:
+    """Return whether the pipeline is running plus the summary of the last finished run."""
+    with _status_lock:
+        return {
+            "running": _pipeline_lock.locked(),
+            "started_at": _run_state["started_at"],
+            "finished_at": _run_state["finished_at"],
+            "last_run": _run_state["last_run"],
+        }
+
+
+def run_automation_pipeline(
+    db_session: Optional[Any] = None,
+    session_factory=SessionLocal,
+    jsearch_client: Optional[Any] = None,
+    ai_client: Optional[Any] = None,
+    telegram_client: Optional[Any] = None,
+    num_pages: int = 1,
+) -> Dict[str, Any]:
+    """
+    Public entry point: runs the pipeline and records start/finish time and summary
+    so the API/UI can report progress. See _execute_pipeline for the actual logic.
+    """
+    started = _now_iso()
+    try:
+        summary = _execute_pipeline(
+            db_session=db_session,
+            session_factory=session_factory,
+            jsearch_client=jsearch_client,
+            ai_client=ai_client,
+            telegram_client=telegram_client,
+            num_pages=num_pages,
+        )
+    except Exception as exc:
+        logger.exception("Pipeline crashed unexpectedly")
+        summary = {"status": "error", "message": f"Pipeline crashed: {exc}", "details": []}
+
+    # A rejected overlapping run must not overwrite the in-progress run's record.
+    if summary.get("status") != "already_running":
+        with _status_lock:
+            _run_state["started_at"] = started
+            _run_state["finished_at"] = _now_iso()
+            _run_state["last_run"] = summary
+    return summary

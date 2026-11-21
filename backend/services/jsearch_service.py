@@ -19,7 +19,7 @@ logger.setLevel(logging.INFO)
 
 # Default RapidAPI configuration for JSearch
 DEFAULT_API_HOST = "jsearch.p.rapidapi.com"
-DEFAULT_API_URL = "https://jsearch.p.rapidapi.com/search"
+DEFAULT_API_URL = "https://jsearch.p.rapidapi.com/search-v2"  # the old /search endpoint was removed by JSearch
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
 
@@ -66,6 +66,26 @@ def get_api_key() -> str:
             "RAPIDAPI_KEY is not configured in environment variables. Please add it to your .env file."
         )
     return key.strip()
+
+
+# JSearch defaults to country="us"; map common preferred-location names to ISO codes so
+# searches such as "Python Developer in India" are actually targeted at that country.
+COUNTRY_CODES = {
+    "india": "in", "united states": "us", "usa": "us", "us": "us", "united kingdom": "gb", "uk": "gb",
+    "canada": "ca", "australia": "au", "germany": "de", "france": "fr", "singapore": "sg",
+    "uae": "ae", "united arab emirates": "ae", "netherlands": "nl", "ireland": "ie", "spain": "es",
+}
+
+
+def infer_country_code(preferred_locations: Optional[str]) -> Optional[str]:
+    """Return an ISO country code if any preferred location names a known country, else None."""
+    if not preferred_locations:
+        return None
+    for loc in preferred_locations.split(","):
+        code = COUNTRY_CODES.get(loc.strip().lower())
+        if code:
+            return code
+    return None
 
 
 def build_search_query(active_role: str, preferred_locations: Optional[str] = None) -> str:
@@ -144,6 +164,17 @@ def extract_experience_text(raw_job: Dict[str, Any]) -> Optional[str]:
                     match = re.search(r'(\d+\+?\s*(?:to|-)?\s*\d*\s*(?:years?|yrs?|months?))', qual, re.IGNORECASE)
                     if match:
                         return match.group(1).strip()
+
+    # Fallback: the API no longer always returns structured experience, so scan the description
+    # for phrases like "3+ years of experience" or "2-4 years experience".
+    desc = raw_job.get("job_description")
+    if isinstance(desc, str) and desc:
+        match = re.search(
+            r'(\d+\s*\+?\s*(?:(?:to|-|–)\s*\d+\s*)?(?:years?|yrs?))\s*(?:of\s+)?(?:[\w-]+\s+){0,2}?experience',
+            desc, re.IGNORECASE,
+        )
+        if match:
+            return match.group(1).strip()
 
     return None
 
@@ -234,6 +265,9 @@ def fetch_jobs(
         "num_pages": str(max(1, num_pages)),
         "date_posted": date_posted,
     }
+    country = infer_country_code(preferred_locations)
+    if country:
+        params["country"] = country
 
     logger.info(f"Initiating JSearch query: '{query}' (pages: {num_pages})")
 
@@ -272,6 +306,9 @@ def fetch_jobs(
         raise JSearchError("JSearch API response is not a valid JSON dictionary.")
 
     raw_jobs = data.get("data")
+    if isinstance(raw_jobs, dict):
+        # /search-v2 wraps results as {"jobs": [...], "cursor": ...}
+        raw_jobs = raw_jobs.get("jobs")
     if not raw_jobs or not isinstance(raw_jobs, list):
         logger.info("JSearch returned zero job items for this query.")
         return []

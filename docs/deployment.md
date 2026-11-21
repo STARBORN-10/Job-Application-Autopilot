@@ -31,7 +31,12 @@ This document outlines how to deploy the **Job Application Autopilot** stack (Fa
 ### Backend (`backend/.env` or Host Environment)
 | Variable | Required | Description | Example |
 |---|---|---|---|
-| `MAKE_API_KEY` | **Yes** | Shared secret key required for Make.com to call `/api/jobs` and `/api/make/*` | `super_secret_make_key_123` |
+| `RAPIDAPI_KEY` | **Yes** | JSearch (RapidAPI) key for job discovery | `abc123...` |
+| `GEMINI_API_KEY` | **Yes** | Google Gemini key for scoring, cover letters and fit analysis | `AIza...` |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | No | Enables Telegram job alerts | `123:ABC` / `987654` |
+| `AUTO_RUN_INTERVAL_MINUTES` | No | Built-in scheduler interval; `0`/unset disables. Needs an always-on host (a sleeping free tier will miss runs; use an external cron to call `POST /api/automation/trigger` instead) | `360` |
+| `RETRY_MAX_ATTEMPTS` / `RETRY_BASE_DELAY_SECONDS` | No | Retry tuning for transient API errors | `3` / `1.5` |
+| `MAKE_API_KEY` | Legacy | Only needed if an external tool still calls `POST /api/jobs` or `/api/make/*` | `super_secret_make_key_123` |
 | `DATABASE_URL` | No | Connection string for database (SQLite by default, PostgreSQL recommended) | `postgresql://user:pass@host:5432/db` |
 | `CORS_ORIGINS` | No | Comma-separated list of allowed frontend origins (defaults to `*`) | `https://my-job-app.vercel.app,http://localhost:5173` |
 | `MAKE_WEBHOOK_URL`| No | Default Make.com Webhook URL (can also be configured via Settings UI) | `https://hook.eu2.make.com/xxxx` |

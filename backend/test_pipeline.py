@@ -365,6 +365,112 @@ def run_all_pipeline_tests():
 
         assert_test(saved_record is not None, "Job remains in DB after Telegram failure")
 
+    # -----------------------------------------------------------------------
+    # 10. Test: Run status tracking (feeds GET /api/automation/status)
+    # -----------------------------------------------------------------------
+    print("\n--- 10. Testing Run Status Tracking ---")
+    status = pipeline.get_pipeline_status()
+    assert_test(status["running"] is False, "Status reports not running when idle")
+    assert_test(status["last_run"] is not None and status["last_run"]["status"] == "success",
+                "Status records the last finished run summary")
+    assert_test(status["started_at"] is not None and status["finished_at"] is not None,
+                "Status records start and finish timestamps")
+
+    finished_before = status["finished_at"]
+    pipeline._pipeline_lock.acquire(blocking=False)
+    try:
+        assert_test(pipeline.get_pipeline_status()["running"] is True, "Status reports running while lock is held")
+        pipeline.run_automation_pipeline(db_session=db)  # rejected as already_running
+    finally:
+        pipeline._pipeline_lock.release()
+    assert_test(pipeline.get_pipeline_status()["finished_at"] == finished_before,
+                "Rejected overlapping run does not overwrite the last-run record")
+
+    with patch("services.jsearch_service.fetch_jobs", side_effect=Exception("boom")):
+        crashed = pipeline.run_automation_pipeline(db_session=db)
+    assert_test(crashed["status"] == "error", "Discovery failure is reported as status 'error'")
+    assert_test(pipeline.get_pipeline_status()["last_run"]["status"] == "error", "Failed run is recorded in status")
+
+    # -----------------------------------------------------------------------
+    # 11. Test: Retry with exponential backoff on transient API errors
+    # -----------------------------------------------------------------------
+    print("\n--- 11. Testing Retry / Backoff ---")
+    from services.retry import retry_call
+    from services import ai_service, jsearch_service
+
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ai_service.AIRateLimitError("429")
+        return "ok"
+
+    with patch("services.retry.time.sleep") as mock_sleep:
+        result = retry_call(flaky, retry_on=(ai_service.AIRateLimitError,), attempts=3, base_delay=1.0)
+    assert_test(result == "ok" and calls["n"] == 3, "Transient error retried until success")
+    assert_test(mock_sleep.call_count == 2, "Slept between attempts only")
+    delays = [c.args[0] for c in mock_sleep.call_args_list]
+    assert_test(1.0 <= delays[0] < 1.2 and 2.0 <= delays[1] < 2.4, "Backoff doubles each attempt (with jitter)")
+
+    calls["n"] = 0
+    with patch("services.retry.time.sleep"):
+        try:
+            retry_call(lambda: (_ for _ in ()).throw(ai_service.AITimeoutError("t")),
+                       retry_on=(ai_service.AITimeoutError,), attempts=2, base_delay=0.1)
+            raised = False
+        except ai_service.AITimeoutError:
+            raised = True
+    assert_test(raised, "Error re-raised once attempts are exhausted")
+
+    auth_calls = {"n": 0}
+
+    def bad_auth():
+        auth_calls["n"] += 1
+        raise ai_service.AIAuthError("bad key")
+
+    with patch("services.retry.time.sleep") as mock_sleep:
+        try:
+            retry_call(bad_auth, retry_on=(ai_service.AITimeoutError,), attempts=3)
+        except ai_service.AIAuthError:
+            pass
+    assert_test(auth_calls["n"] == 1 and mock_sleep.call_count == 0, "Non-transient (auth) error is NOT retried")
+
+    # Integration: pipeline survives a transient Gemini rate-limit and still saves the job
+    retry_job = schemas.JobCreate(
+        title="Retry Eng", company="Flaky Corp", url="https://example.com/job/retry-1",
+        location="Remote", description="Python ML role", experience="Fresher", source="JSearch",
+    )
+    eval_calls = {"n": 0}
+
+    def flaky_eval(**kwargs):
+        eval_calls["n"] += 1
+        if eval_calls["n"] == 1:
+            raise ai_service.AIRateLimitError("429 once")
+        return AIEvaluationResult(score=9.0, match_reason="Great", cover_letter="Dear team")
+
+    with patch("services.retry.time.sleep"), \
+         patch("services.jsearch_service.fetch_jobs", return_value=[retry_job]), \
+         patch("services.ai_service.evaluate_job", side_effect=flaky_eval), \
+         patch("services.notification_service.send_job_alert"):
+        summary = pipeline.run_automation_pipeline(db_session=db)
+    assert_test(eval_calls["n"] == 2, "Gemini call retried after transient rate limit")
+    assert_test(summary["saved"] == 1 and summary["failed"] == 0, "Job saved after successful retry")
+
+    # Integration: discovery retried on network error
+    fetch_calls = {"n": 0}
+
+    def flaky_fetch(**kwargs):
+        fetch_calls["n"] += 1
+        if fetch_calls["n"] == 1:
+            raise jsearch_service.JSearchNetworkError("timeout")
+        return []
+
+    with patch("services.retry.time.sleep"), \
+         patch("services.jsearch_service.fetch_jobs", side_effect=flaky_fetch):
+        summary = pipeline.run_automation_pipeline(db_session=db)
+    assert_test(fetch_calls["n"] == 2 and summary["status"] == "success", "JSearch fetch retried after network error")
+
     print("\n" + "=" * 70)
     print(f"ALL {total_tests} PIPELINE ORCHESTRATOR TESTS PASSED! ({passed_tests}/{total_tests})")
     print("=" * 70)

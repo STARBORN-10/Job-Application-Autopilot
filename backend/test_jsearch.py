@@ -253,6 +253,36 @@ def run_all_jsearch_tests():
     except JSearchConfigError:
         assert_test(True, "Missing API key raises JSearchConfigError without leaking credentials")
 
+    # -----------------------------------------------------------------------
+    # 6. /search-v2 API format, country targeting, experience fallback
+    # -----------------------------------------------------------------------
+    print("\n--- 6. Testing /search-v2 response format ---")
+    from services import jsearch_service as _js
+    os.environ["RAPIDAPI_KEY"] = "mock_test_key"  # an earlier test removes it on purpose
+    seen = {}
+
+    def v2_handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = request.url
+        return httpx.Response(200, json={
+            "status": "OK",
+            "data": {"jobs": [
+                {"job_title": "Python Developer", "employer_name": "Acme", "job_city": "Pune", "job_country": "IN",
+                 "job_apply_link": "https://acme.io/apply/1",
+                 "job_description": "We need 3+ years of experience in Python and SQL."},
+                {"job_title": "Intern", "employer_name": "Beta", "job_description": "Great learning opportunity."},
+            ], "cursor": "abc"},
+        })
+
+    v2_jobs = fetch_jobs("Python Developer", "India, Remote", client=httpx.Client(transport=httpx.MockTransport(v2_handler)))
+    assert_test(_js.DEFAULT_API_URL.endswith("/search-v2"), "Default endpoint is /search-v2")
+    assert_test(seen["url"].path == "/search-v2", "Request is sent to /search-v2")
+    assert_test(len(v2_jobs) == 2, "Parses jobs nested under data.jobs")
+    assert_test(seen["url"].params.get("country") == "in", "Sends country=in for an India search")
+    assert_test(v2_jobs[0].experience == "3+ years", "Experience extracted from description when API omits it")
+    assert_test(v2_jobs[1].experience is None, "No experience phrase -> None (not invented)")
+    assert_test(_js.infer_country_code("Remote, Bangalore") is None, "Unknown location -> no country override")
+    assert_test(_js.infer_country_code("Remote, UK") == "gb", "UK maps to gb")
+
     print("\n" + "=" * 70)
     print(f"ALL {total_tests} JSEARCH OFFLINE TESTS PASSED SUCCESSFULLY! ({passed_tests}/{total_tests})")
     print("=" * 70)

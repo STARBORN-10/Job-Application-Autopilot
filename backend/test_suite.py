@@ -263,7 +263,7 @@ def run_all_tests():
         "url": "https://example.com/job/fresher-ai-1",
         "experience": "Fresher",
     }, headers=AUTH_HEADER)
-    assert_test(r.status_code == 409, "Exact URL duplicate rejected (HTTP 409)")
+    assert_test(r.status_code == 200, "Exact URL duplicate returns existing job (HTTP 200, idempotent)")
 
     # 4.2 Trailing slash URL duplicate
     r = client.post("/api/jobs", json={
@@ -272,7 +272,7 @@ def run_all_tests():
         "url": "https://example.com/job/fresher-ai-1/",
         "experience": "Fresher",
     }, headers=AUTH_HEADER)
-    assert_test(r.status_code == 409, "Trailing slash URL duplicate rejected (HTTP 409)")
+    assert_test(r.status_code == 200, "Trailing slash URL duplicate returns existing job (HTTP 200, idempotent)")
 
     # 4.3 Fallback match by Title + Company (no URL provided)
     r1 = client.post("/api/jobs", json={
@@ -290,7 +290,7 @@ def run_all_tests():
         "url": "",
         "experience": "Fresher",
     }, headers=AUTH_HEADER)
-    assert_test(r2.status_code == 409, "Title + Company fallback duplicate rejected (HTTP 409)")
+    assert_test(r2.status_code == 200, "Title + Company fallback duplicate returns existing job (HTTP 200, idempotent)")
 
     # -----------------------------------------------------------------------
     # 5. General Settings Management
@@ -325,23 +325,25 @@ def run_all_tests():
     # -----------------------------------------------------------------------
     # 6. Automation Webhook Trigger Endpoint
     # -----------------------------------------------------------------------
-    print("\n--- 6. Testing Automation Webhook Trigger ---")
+    print("\n--- 6. Testing Native Automation Trigger ---")
 
-    # 6.1 Without webhook URL configured
-    client.put("/api/settings", json={**new_settings, "make_webhook_url": ""})
-    r = client.post("/api/automation/trigger")
-    assert_test(r.status_code == 400, "Trigger without webhook URL returns 400 Bad Request")
-
-    # 6.2 With webhook URL configured (mocked external HTTP call)
-    client.put("/api/settings", json={**new_settings, "make_webhook_url": "https://hook.eu2.make.com/mock-test"})
-    with patch("httpx.post") as mock_post:
-        mock_response = httpx.Response(status_code=200, text="Accepted")
-        mock_post.return_value = mock_response
-
+    # The trigger now starts the native Python pipeline as a background task
+    # (no Make.com webhook needed). Mock the pipeline so no real APIs/DB are hit.
+    with patch("main.run_automation_pipeline") as mock_pipeline:
         r = client.post("/api/automation/trigger")
-        assert_test(r.status_code == 200, "Trigger with configured webhook returns 200 OK")
-        assert_test(r.json()["status"] == "success", "Response status is 'success'")
-        mock_post.assert_called_once()
+        assert_test(r.status_code == 200, "Trigger returns 200 OK")
+        assert_test(r.json()["status"] == "started", "Response status is 'started'")
+        mock_pipeline.assert_called_once()
+
+    r = client.get("/api/automation/status")
+    assert_test(r.status_code == 200, "GET /api/automation/status returns 200 OK")
+    assert_test(r.json()["running"] is False and "last_run" in r.json(), "Status payload has running + last_run")
+
+    with patch("main.get_pipeline_status", return_value={"running": True}), \
+         patch("main.run_automation_pipeline") as mock_pipeline:
+        r = client.post("/api/automation/trigger")
+        assert_test(r.json()["status"] == "already_running", "Trigger reports 'already_running' when busy")
+        mock_pipeline.assert_not_called()
 
     # -----------------------------------------------------------------------
     # 7. Job CRUD & Lifecycle Operations

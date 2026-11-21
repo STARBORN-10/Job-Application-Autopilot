@@ -3,11 +3,14 @@ import json
 import re
 import shutil
 import uuid
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from dotenv import load_dotenv
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Form, Query, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Form, Query, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -17,7 +20,11 @@ import PyPDF2
 
 import models, schemas, crud
 from database import SessionLocal, engine, get_db
-from services.pipeline import run_automation_pipeline
+from services.pipeline import run_automation_pipeline, get_pipeline_status
+from services import ai_service, analytics as analytics_service
+from services.retry import retry_call
+
+logger = logging.getLogger("job_autopilot")
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
@@ -41,7 +48,34 @@ ALLOWED_ROLES = [
     "Automation Engineer",
 ]
 
-app = FastAPI(title="Job Application Autopilot API")
+async def _scheduler_loop(interval_minutes: float):
+    """Run the automation pipeline every `interval_minutes` (first run after one interval)."""
+    while True:
+        await asyncio.sleep(interval_minutes * 60)
+        try:
+            await asyncio.to_thread(run_automation_pipeline)
+        except Exception:
+            logger.exception("Scheduled pipeline run failed")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start the optional built-in scheduler (AUTO_RUN_INTERVAL_MINUTES > 0)."""
+    task = None
+    try:
+        interval = float(os.getenv("AUTO_RUN_INTERVAL_MINUTES", "0") or 0)
+    except ValueError:
+        logger.warning("Invalid AUTO_RUN_INTERVAL_MINUTES; scheduler disabled.")
+        interval = 0
+    if interval > 0:
+        logger.info(f"Automation scheduler enabled: every {interval:g} minute(s).")
+        task = asyncio.create_task(_scheduler_loop(interval))
+    yield
+    if task:
+        task.cancel()
+
+
+app = FastAPI(title="Job Application Autopilot API", lifespan=lifespan)
 
 # ---------------------------------------------------------------------------
 # CORS
@@ -220,6 +254,65 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
     if db_job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return db_job
+
+
+# ===========================================================================
+# Analytics, export & AI compatibility analysis
+# ===========================================================================
+
+@app.get("/api/analytics")
+def get_analytics(days: int = Query(30, ge=7, le=365), db: Session = Depends(get_db)):
+    """Aggregated statistics for the analytics dashboard (computed on demand)."""
+    return analytics_service.build_analytics(crud.get_jobs(db, skip=0, limit=100000), days=days)
+
+
+@app.get("/api/export/jobs.csv")
+def export_jobs_csv(db: Session = Depends(get_db)):
+    """Download all jobs as CSV (native replacement for the old Make.com -> Google Sheets log)."""
+    csv_text = analytics_service.jobs_to_csv(crud.get_jobs(db, skip=0, limit=100000))
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="jobs.csv"'},
+    )
+
+
+@app.post("/api/jobs/{job_id}/analyze")
+def analyze_job_compatibility(job_id: int, db: Session = Depends(get_db)):
+    """Skill-gap analysis of the active resume against one job (Gemini; generated on demand)."""
+    job = crud.get_job(db, job_id=job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    active_role = crud.get_general_settings(db).active_role or "AI/ML Engineer"
+    resume = crud.get_active_resume_for_role(db, active_role)
+    if not resume or not (resume.extracted_text or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail=f"No active resume with extracted text found for role '{active_role}'. Upload a resume first.",
+        )
+
+    try:
+        return retry_call(
+            lambda: ai_service.analyze_compatibility(
+                job_title=job.title,
+                company=job.company,
+                job_description=job.description or "",
+                resume_text=resume.extracted_text,
+            ),
+            retry_on=(ai_service.AITimeoutError, ai_service.AIRateLimitError, ai_service.AIResponseFormatError),
+            label="Gemini compatibility analysis",
+        )
+    except ai_service.AIValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ai_service.AIConfigError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ai_service.AIRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
+    except ai_service.AITimeoutError as exc:
+        raise HTTPException(status_code=504, detail=str(exc))
+    except ai_service.AIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 # ===========================================================================
@@ -493,6 +586,12 @@ def trigger_automation(background_tasks: BackgroundTasks):
     """
     Trigger the native Python automation pipeline in the background.
     """
+    if get_pipeline_status()["running"]:
+        return schemas.AutomationTriggerResponse(
+            status="already_running",
+            message="Automation pipeline is already running. Check /api/automation/status for progress.",
+            details={},
+        )
     # Start the pipeline as a background task. The pipeline will manage its own DB session if needed.
     background_tasks.add_task(run_automation_pipeline)
     return schemas.AutomationTriggerResponse(
@@ -500,3 +599,9 @@ def trigger_automation(background_tasks: BackgroundTasks):
         message="Automation pipeline started.",
         details={},
     )
+
+
+@app.get("/api/automation/status")
+def automation_status():
+    """Report whether the pipeline is running and the summary of the last finished run."""
+    return get_pipeline_status()

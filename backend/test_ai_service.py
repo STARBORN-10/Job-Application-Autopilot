@@ -224,6 +224,15 @@ def run_all_ai_service_tests():
     except AIRateLimitError:
         assert_test(True, "API 429 maps to AIRateLimitError")
 
+    # 5.2b Temporary overload (HTTP 503) must be retryable (AITimeoutError)
+    overload_err = genai_errors.APIError(503, {"error": {"message": "high demand", "status": "UNAVAILABLE"}})
+    mock_client.models.generate_content.side_effect = overload_err
+    try:
+        evaluate_job("ML Eng", "Corp", "Job desc", "Resume text", client=mock_client)
+        assert_test(False, "API 503 should raise a retryable error")
+    except AITimeoutError:
+        assert_test(True, "API 503 maps to retryable AITimeoutError")
+
     # 5.3 Authentication error (HTTP 401)
     auth_err = genai_errors.APIError(401, {"error": {"message": "API_KEY_INVALID", "status": "UNAUTHENTICATED"}})
     mock_client.models.generate_content.side_effect = auth_err
