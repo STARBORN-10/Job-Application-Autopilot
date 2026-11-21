@@ -265,3 +265,5 @@ export const updateAtsCompanies = (companies) =>
 export const fetchAiProviders = () => jsonRequest(`${API_URL}/ai/providers`);
 export const fetchScoringWeights = () => jsonRequest(`${API_URL}/scoring/weights`);
 export const updateScoringWeights = (weights) => jsonRequest(`${API_URL}/scoring/weights`, 'PUT', { weights });
+export const approveJob = (id) => jsonRequest(`${API_URL}/jobs/${id}/approve`, 'POST', undefined, true);
+export const skipJob = (id) => jsonRequest(`${API_URL}/jobs/${id}/skip`, 'POST', undefined, true);

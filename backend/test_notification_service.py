@@ -242,6 +242,39 @@ def run_all_notification_tests():
     )
     assert_test(alert_res.get("ok") is True, "send_job_alert formats and dispatches successfully")
 
+    # -----------------------------------------------------------------------
+    # 5. V2: inline Approve / Skip / Cover letter buttons and generic Bot API calls
+    # -----------------------------------------------------------------------
+    print("\n--- 5. Testing inline keyboard and call_telegram ---")
+    from services.notification_service import job_keyboard, call_telegram
+    sent = {}
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        sent["body"] = json.loads(request.read())
+        sent["path"] = request.url.path
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 5}})
+
+    send_job_alert(title="ML Engineer", company="Acme", score=8.1, match_reason="Fits", job_id=42,
+                   client=httpx.Client(transport=httpx.MockTransport(capture)))
+    buttons = [b["callback_data"] for row in sent["body"]["reply_markup"]["inline_keyboard"] for b in row]
+    assert_test(buttons == ["approve:42", "skip:42", "cover:42"], "Alert with job_id carries Approve/Skip/Cover letter")
+    send_job_alert(title="ML Engineer", company="Acme", score=8.1, match_reason="Fits",
+                   client=httpx.Client(transport=httpx.MockTransport(capture)))
+    assert_test("reply_markup" not in sent["body"], "Alert without job_id has no buttons (V1 behaviour)")
+    assert_test(job_keyboard(7)["inline_keyboard"][0][0]["text"] == "Approve", "Keyboard labels")
+
+    result = call_telegram("answerCallbackQuery", {"callback_query_id": "1", "text": "ok"},
+                           client=httpx.Client(transport=httpx.MockTransport(capture)))
+    assert_test(sent["path"].endswith("/answerCallbackQuery") and result == {"message_id": 5}, "call_telegram returns result")
+    bad = httpx.Client(transport=httpx.MockTransport(
+        lambda r: httpx.Response(400, json={"ok": False, "description": "message is not modified"})))
+    try:
+        call_telegram("editMessageReplyMarkup", {}, client=bad)
+        raised = False
+    except TelegramNotificationError as exc:
+        raised = "not modified" in str(exc)
+    assert_test(raised, "call_telegram maps API errors to TelegramNotificationError")
+
     print("\n" + "=" * 70)
     print(f"ALL {total_tests} TELEGRAM NOTIFICATION TESTS PASSED! ({passed_tests}/{total_tests})")
     print("=" * 70)

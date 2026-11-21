@@ -311,7 +311,7 @@ def _notify(saved_job, telegram_client) -> bool:
             lambda: notification_service.send_job_alert(
                 title=saved_job.title, company=saved_job.company, score=saved_job.score,
                 match_reason=saved_job.match_reason, url=saved_job.url, experience=saved_job.experience,
-                location=saved_job.location, client=telegram_client,
+                location=saved_job.location, client=telegram_client, job_id=saved_job.id,
             ),
             retry_on=_TELEGRAM_TRANSIENT,
             label="Telegram alert",

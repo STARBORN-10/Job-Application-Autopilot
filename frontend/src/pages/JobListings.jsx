@@ -3,6 +3,7 @@ import { fetchJobs, updateJob, EXPORT_CSV_URL } from '../api';
 import { Link } from 'react-router-dom';
 import { Search, MapPin, Download } from 'lucide-react';
 import { ScoreBreakdownCompact } from '../components/ScoreBreakdown';
+import ApprovalControls, { ApprovalBadge } from '../components/ApprovalControls';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -15,6 +16,7 @@ const JobListings = () => {
   const [filterExp, setFilterExp] = useState('all');
   const [filterLocation, setFilterLocation] = useState('');
   const [filterSource, setFilterSource] = useState('all');
+  const [filterApproval, setFilterApproval] = useState('all');
   const [filterDate, setFilterDate] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
   const [now] = useState(() => Date.now()); // fixed at mount; keeps render pure
@@ -61,10 +63,11 @@ const JobListings = () => {
     const matchesLocation = !filterLocation.trim() ||
                             (job.location || '').toLowerCase().includes(filterLocation.trim().toLowerCase());
     const matchesSource = filterSource === 'all' || (job.source || 'Unknown') === filterSource;
+    const matchesApproval = filterApproval === 'all' || (job.approval_status || 'pending') === filterApproval;
     const matchesDate = filterDate === 'all' ||
                         (job.date_found && now - new Date(job.date_found).getTime() <= Number(filterDate) * DAY_MS);
 
-    return matchesSearch && matchesScore && matchesStatus && matchesExp && matchesLocation && matchesSource && matchesDate;
+    return matchesSearch && matchesScore && matchesStatus && matchesExp && matchesLocation && matchesSource && matchesDate && matchesApproval;
   }).sort((a, b) => {
     if (sortBy === 'score') return (b.score || 0) - (a.score || 0);
     if (sortBy === 'company') return (a.company || '').localeCompare(b.company || '');
@@ -146,6 +149,12 @@ const JobListings = () => {
             style={{ paddingLeft: '32px' }}
           />
         </div>
+        <select className="form-control" style={{ width: 'auto' }} value={filterApproval} onChange={e => setFilterApproval(e.target.value)}>
+          <option value="all">Any Decision</option>
+          <option value="pending">Awaiting decision</option>
+          <option value="approved">Approved</option>
+          <option value="skipped">Skipped</option>
+        </select>
         <select className="form-control" style={{ width: 'auto' }} value={filterSource} onChange={e => setFilterSource(e.target.value)}>
           <option value="all">All Sources</option>
           {sources.map(s => <option key={s} value={s}>{s}</option>)}
@@ -195,13 +204,16 @@ const JobListings = () => {
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   {job.match_reason}
                 </p>
-                <div>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
                    <span className={`badge badge-${job.status === 'Applied' ? 'primary' : job.status === 'To Apply' ? 'warning' : 'neutral'}`}>
                      {job.status}
                    </span>
+                   <ApprovalBadge status={job.approval_status} />
                 </div>
               </div>
               <div className="job-actions" style={{ flexDirection: 'column', gap: '0.5rem', minWidth: '120px' }}>
+                <ApprovalControls job={job} compact
+                  onChange={(updated) => setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)))} />
                 {job.status === 'To Apply' && (
                   <button className="btn btn-primary" onClick={() => handleApply(job)}>
                     Mark Applied

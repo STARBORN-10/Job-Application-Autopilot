@@ -1,8 +1,11 @@
 """Cover letters through the LLM layer (task "write"): short, truthful, grounded in the resume."""
+from typing import Optional
+
 from pydantic import BaseModel, field_validator
 
+import crud
 from services import llm
-from services.scoring.profile import CandidateProfile
+from services.scoring.profile import CandidateProfile, get_profile
 
 RESUME_CHARS = 2500
 DESCRIPTION_CHARS = 2000
@@ -35,3 +38,21 @@ def write_cover_letter(job, resume_text: str, profile: CandidateProfile) -> tupl
     )
     result = llm.generate_json("write", prompt, schema=_Letter, system=WRITER_SYSTEM, max_tokens=900)
     return result.data["cover_letter"], result.provider
+
+
+def ensure_cover_letter(db, job) -> Optional[str]:
+    """The job's cover letter, writing (and saving) one on demand if it has none. None if that is not possible."""
+    if job.cover_letter and job.cover_letter.strip():
+        return job.cover_letter
+    settings = crud.get_general_settings(db)
+    resume = crud.get_active_resume_for_role(db, settings.active_role)
+    if not resume or not (resume.extracted_text or "").strip():
+        return None
+    try:
+        profile = get_profile(db, resume, settings.active_role, settings.target_roles)
+        letter, _provider = write_cover_letter(job, resume.extracted_text, profile)
+    except llm.LLMError:
+        return None
+    job.cover_letter = letter
+    db.commit()
+    return letter

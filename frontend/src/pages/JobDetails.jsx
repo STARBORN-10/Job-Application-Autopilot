@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { fetchJob, updateJob, deleteJob, analyzeJob } from '../api';
 import { ArrowLeft, ExternalLink, Trash2, Sparkles } from 'lucide-react';
 import ScoreBreakdown from '../components/ScoreBreakdown';
+import ApprovalControls, { ApprovalBadge } from '../components/ApprovalControls';
 
 const JobDetails = () => {
   const { id } = useParams();
@@ -95,6 +96,8 @@ const JobDetails = () => {
             <div className={`score-${job.score >= 8 ? 'high' : job.score >= 5 ? 'medium' : 'low'}`} style={{ fontSize: '1.5rem', fontWeight: '700' }}>
               {job.score}/10
             </div>
+            <ApprovalBadge status={job.approval_status} />
+            <ApprovalControls job={job} onChange={(updated) => setJob(updated)} />
             <select 
               className="form-control" 
               value={job.status}

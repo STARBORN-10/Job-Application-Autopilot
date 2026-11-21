@@ -1,4 +1,5 @@
 import os
+import hmac
 import json
 import re
 import shutil
@@ -10,7 +11,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Form, Query, BackgroundTasks, Response
+from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -23,9 +24,11 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 import models, schemas, crud
 import db_migrations
 from database import SessionLocal, engine, get_db
-from security import trigger_cooldown
+from security import require_admin, trigger_cooldown
 from services.pipeline import run_automation_pipeline, get_pipeline_status
-from services import ai_service, analytics as analytics_service, llm
+from services import ai_service, analytics as analytics_service, llm, telegram_bot
+from services import notification_service
+from services.decisions import record_decision
 from services.retry import retry_call
 from services.scoring import weights as scoring_weights
 from services.sources import registry as source_registry
@@ -80,10 +83,24 @@ async def _init_db_with_retry(retry_seconds: float = 30.0):
             await asyncio.sleep(retry_seconds)
 
 
+def _start_telegram_poller():
+    """Local-development alternative to the webhook (TELEGRAM_MODE=polling); off by default."""
+    if not telegram_bot.polling_enabled():
+        return None
+    if not (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip():
+        logger.warning("TELEGRAM_MODE=polling but TELEGRAM_BOT_TOKEN is not set; Telegram polling disabled.")
+        return None
+    poller = telegram_bot.Poller(SessionLocal, on_approved=_on_approved)
+    poller.start()
+    logger.info("Telegram polling started (TELEGRAM_MODE=polling).")
+    return poller
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Initialise the database (with retries) and start the optional scheduler."""
+    """Initialise the database (with retries) and start the optional scheduler and Telegram poller."""
     db_task = asyncio.create_task(_init_db_with_retry())
+    poller = _start_telegram_poller()
     task = None
     try:
         interval = float(os.getenv("AUTO_RUN_INTERVAL_MINUTES", "0") or 0)
@@ -97,6 +114,8 @@ async def lifespan(_app: FastAPI):
     db_task.cancel()
     if task:
         task.cancel()
+    if poller:
+        poller.stop()
 
 
 app = FastAPI(title="Job Application Autopilot API", lifespan=lifespan)
@@ -708,6 +727,85 @@ def update_scoring_weights(payload: dict, db: Session = Depends(get_db)):
     except scoring_weights.WeightsError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"weights": weights, "defaults": scoring_weights.DEFAULT_WEIGHTS, "parts": list(scoring_weights.PARTS)}
+
+
+def _on_approved(db: Session, job: models.Job):
+    """Runs after a job is approved (Telegram or dashboard)."""
+    return None
+
+
+def _decide(job_id: int, decision: str, db: Session) -> dict:
+    job = crud.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    outcome = record_decision(db, job, decision, channel="dashboard")
+    application = _on_approved(db, job) if outcome.changed and decision == "approved" else None
+    return {"job": schemas.JobResponse.model_validate(job).model_dump(mode="json"), "changed": outcome.changed,
+            "application": application}
+
+
+@app.post("/api/jobs/{job_id}/approve", dependencies=[Depends(require_admin)])
+def approve_job(job_id: int, db: Session = Depends(get_db)):
+    """Approve a job (same as the Telegram Approve button). Needs X-Admin-Key when ADMIN_API_KEY is set."""
+    return _decide(job_id, "approved", db)
+
+
+@app.post("/api/jobs/{job_id}/skip", dependencies=[Depends(require_admin)])
+def skip_job(job_id: int, db: Session = Depends(get_db)):
+    """Skip a job (same as the Telegram Skip button). Needs X-Admin-Key when ADMIN_API_KEY is set."""
+    return _decide(job_id, "skipped", db)
+
+
+# ===========================================================================
+# V2: Telegram approve / skip
+# ===========================================================================
+
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_telegram_bot_api_secret_token: Optional[str] = Header(default=None),
+):
+    """Receives button taps from Telegram. Only requests carrying TELEGRAM_WEBHOOK_SECRET are accepted."""
+    secret = telegram_bot.webhook_secret()
+    if not secret:
+        logger.warning("Telegram webhook called but TELEGRAM_WEBHOOK_SECRET is not set; ignoring.")
+        raise HTTPException(status_code=503, detail="Telegram webhook is not configured.")
+    if not x_telegram_bot_api_secret_token or not hmac.compare_digest(x_telegram_bot_api_secret_token, secret):
+        raise HTTPException(status_code=401, detail="Invalid webhook secret.")
+    try:
+        update = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    background_tasks.add_task(_process_telegram_update, update)
+    return {"ok": True}
+
+
+def _process_telegram_update(update: dict) -> None:
+    db = SessionLocal()
+    try:
+        telegram_bot.handle_update(db, update, on_approved=_on_approved)
+    except Exception:
+        logger.exception("Failed to process a Telegram update")
+    finally:
+        db.close()
+
+
+@app.post("/api/telegram/set-webhook", dependencies=[Depends(require_admin)])
+def telegram_set_webhook(payload: Optional[dict] = None):
+    """
+    Register this backend's webhook with Telegram. Body: {"base_url": "https://your-backend"} or set
+    PUBLIC_BACKEND_URL. Needs TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET (and X-Admin-Key if configured).
+    """
+    base_url = ((payload or {}).get("base_url") or os.getenv("PUBLIC_BACKEND_URL") or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=422, detail="Provide base_url or set PUBLIC_BACKEND_URL.")
+    try:
+        return telegram_bot.set_webhook(base_url)
+    except notification_service.TelegramConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except notification_service.TelegramNotificationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 @app.get("/api/ai/providers")
