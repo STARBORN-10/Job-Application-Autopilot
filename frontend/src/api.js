@@ -22,9 +22,21 @@ const apiFetch = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) => {
   }
 };
 
-// Quick health check used by the "backend unreachable" banner.
+// Health check used by the "backend unreachable" banner. Uses /api/health (reports database
+// problems) and falls back to the root URL for older backends that do not have it yet.
 export const pingBackend = async () => {
-  const response = await apiFetch(`${API_ROOT}/`, {}, 8000);
+  const response = await apiFetch(`${API_URL}/health`, {}, 8000);
+  if (response.status === 404) {
+    const root = await apiFetch(`${API_ROOT}/`, {}, 8000);
+    if (!root.ok) throw new Error('Backend not healthy');
+    return true;
+  }
+  if (response.status === 503) {
+    const body = await response.json().catch(() => ({}));
+    const err = new Error(body.detail || 'Database unreachable');
+    err.kind = 'database';
+    throw err;
+  }
   if (!response.ok) throw new Error('Backend not healthy');
   return true;
 };
