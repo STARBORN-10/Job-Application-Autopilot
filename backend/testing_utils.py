@@ -13,11 +13,25 @@ import httpx
 TESTS_DATA = Path(__file__).resolve().parent / "tests_data"
 
 
+OFFLINE_BLANK_VARS = (
+    "RAPIDAPI_KEY", "JSEARCH_API_KEY", "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "ADZUNA_APP_ID",
+    "ADZUNA_APP_KEY", "JOOBLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_WEBHOOK_SECRET",
+    "TELEGRAM_MODE", "SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "ADMIN_API_KEY", "PUBLIC_BACKEND_URL",
+)
+
+
 def use_temp_database() -> str:
-    """Point DATABASE_URL at a new temporary SQLite file. Call BEFORE importing database/main."""
+    """
+    Point DATABASE_URL at a new temporary SQLite file and blank every real credential, so that
+    backend/.env (python-dotenv never overrides variables that already exist) cannot make a test go
+    online. Call BEFORE importing database/main; set any fake keys a test needs afterwards.
+    """
     handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     handle.close()
     os.environ["DATABASE_URL"] = f"sqlite:///{handle.name}"
+    for name in OFFLINE_BLANK_VARS:
+        os.environ[name] = ""
+    os.environ["APPLY_DRY_RUN"] = "true"
     return handle.name
 
 

@@ -9,6 +9,7 @@ import Tracker from './pages/Tracker';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
 import ResumeManager from './pages/ResumeManager';
+import Applications from './pages/Applications';
 import './index.css';
 
 function App() {
@@ -23,6 +24,7 @@ function App() {
             <Route path="/jobs" element={<JobListings />} />
             <Route path="/jobs/:id" element={<JobDetails />} />
             <Route path="/tracker" element={<Tracker />} />
+            <Route path="/applications" element={<Applications />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/resumes" element={<ResumeManager />} />
             <Route path="/settings" element={<Settings />} />

@@ -169,7 +169,8 @@ def run():
         check(r.status_code == 503, "Webhook refused when no secret is configured")
 
     check.section("6. set-webhook and ADMIN_API_KEY")
-    with patch("services.notification_service.call_telegram", return_value=True) as fake_call:
+    with patch("services.notification_service.call_telegram", return_value=True) as fake_call, \
+         patch("services.notification_service.send_telegram_notification", return_value={"ok": True}):
         r = api.post("/api/telegram/set-webhook", json={"base_url": "https://autopilot.example.com/"})
         check(r.status_code == 200 and r.json()["webhook_url"] == "https://autopilot.example.com/api/telegram/webhook",
               "set-webhook registers <base>/api/telegram/webhook")
@@ -185,6 +186,8 @@ def run():
             r = api.post(f"/api/jobs/{third.id}/approve", headers={"X-Admin-Key": "admin-123"})
             check(r.status_code == 200 and r.json()["job"]["approval_status"] == "approved" and r.json()["changed"],
                   "Correct key -> approved")
+            check(r.json()["application"]["method"] == "assisted"
+                  and r.json()["application"]["status"] == "ready_to_submit", "Approval triggers the apply step")
             with patch("main.run_automation_pipeline"):
                 from security import trigger_cooldown
                 trigger_cooldown.reset()

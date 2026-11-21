@@ -267,3 +267,6 @@ export const fetchScoringWeights = () => jsonRequest(`${API_URL}/scoring/weights
 export const updateScoringWeights = (weights) => jsonRequest(`${API_URL}/scoring/weights`, 'PUT', { weights });
 export const approveJob = (id) => jsonRequest(`${API_URL}/jobs/${id}/approve`, 'POST', undefined, true);
 export const skipJob = (id) => jsonRequest(`${API_URL}/jobs/${id}/skip`, 'POST', undefined, true);
+export const fetchApplications = () => jsonRequest(`${API_URL}/applications`);
+export const fetchApplicationsConfig = () => jsonRequest(`${API_URL}/applications/config`);
+export const retryApplication = (jobId) => jsonRequest(`${API_URL}/jobs/${jobId}/apply`, 'POST', undefined, true);

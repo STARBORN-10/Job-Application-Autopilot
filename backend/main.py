@@ -29,6 +29,7 @@ from services.pipeline import run_automation_pipeline, get_pipeline_status
 from services import ai_service, analytics as analytics_service, llm, telegram_bot
 from services import notification_service
 from services.decisions import record_decision
+from services.apply import emailer as apply_emailer, service as apply_service
 from services.retry import retry_call
 from services.scoring import weights as scoring_weights
 from services.sources import registry as source_registry
@@ -729,9 +730,33 @@ def update_scoring_weights(payload: dict, db: Session = Depends(get_db)):
     return {"weights": weights, "defaults": scoring_weights.DEFAULT_WEIGHTS, "parts": list(scoring_weights.PARTS)}
 
 
-def _on_approved(db: Session, job: models.Job):
-    """Runs after a job is approved (Telegram or dashboard)."""
-    return None
+def _on_approved(db: Session, job: models.Job) -> Optional[models.Application]:
+    """After an approval (Telegram or dashboard): apply with the safest method. Never breaks the approval."""
+    try:
+        return apply_service.apply_for_job(db, job)
+    except Exception:
+        logger.exception(f"Applying for job {job.id} failed")
+        db.rollback()
+        return None
+
+
+def _application_out(app_row: Optional[models.Application], job: Optional[models.Job] = None) -> Optional[dict]:
+    if app_row is None:
+        return None
+    try:
+        payload = json.loads(app_row.payload_summary) if app_row.payload_summary else {}
+    except ValueError:
+        payload = {}
+    out = {
+        "id": app_row.id, "job_id": app_row.job_id, "method": app_row.method, "status": app_row.status,
+        "dry_run": bool(app_row.dry_run), "payload_summary": payload, "error": app_row.error,
+        "created_at": app_row.created_at.isoformat() if app_row.created_at else None,
+        "updated_at": app_row.updated_at.isoformat() if app_row.updated_at else None,
+    }
+    if job is not None:
+        out.update(job_title=job.title, job_company=job.company, job_url=job.url,
+                   cover_letter=job.cover_letter if app_row.method == "assisted" else None)
+    return out
 
 
 def _decide(job_id: int, decision: str, db: Session) -> dict:
@@ -741,7 +766,35 @@ def _decide(job_id: int, decision: str, db: Session) -> dict:
     outcome = record_decision(db, job, decision, channel="dashboard")
     application = _on_approved(db, job) if outcome.changed and decision == "approved" else None
     return {"job": schemas.JobResponse.model_validate(job).model_dump(mode="json"), "changed": outcome.changed,
-            "application": application}
+            "application": _application_out(application, job)}
+
+
+@app.post("/api/jobs/{job_id}/apply", dependencies=[Depends(require_admin)])
+def apply_job(job_id: int, db: Session = Depends(get_db)):
+    """Retry applying for an approved job (e.g. after a failed or capped attempt). Never applies to unapproved jobs."""
+    job = crud.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        application = apply_service.apply_for_job(db, job)
+    except apply_service.NotApprovedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return _application_out(application, job)
+
+
+@app.get("/api/applications")
+def list_applications(limit: int = Query(200, ge=1, le=1000), db: Session = Depends(get_db)):
+    """Application log, newest first, with the job's title/company/link."""
+    rows = db.query(models.Application).order_by(models.Application.id.desc()).limit(limit).all()
+    jobs = {j.id: j for j in db.query(models.Job).filter(models.Job.id.in_({r.job_id for r in rows})).all()} if rows else {}
+    return [_application_out(r, jobs.get(r.job_id)) for r in rows]
+
+
+@app.get("/api/applications/config")
+def applications_config(db: Session = Depends(get_db)):
+    """What the apply step will do: dry-run flag (banner), daily cap and whether SMTP is set up."""
+    return {"dry_run": apply_service.dry_run_enabled(), "daily_cap": apply_service.daily_cap(),
+            "emails_today": apply_service.emails_today(db), "smtp_configured": apply_emailer.smtp_configured()}
 
 
 @app.post("/api/jobs/{job_id}/approve", dependencies=[Depends(require_admin)])

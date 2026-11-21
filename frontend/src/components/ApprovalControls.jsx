@@ -33,7 +33,7 @@ const ApprovalControls = ({ job, onChange, compact = false }) => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
       <div style={{ display: 'flex', gap: '0.5rem' }}>
         <button className="btn btn-primary" style={style} disabled={busy || status === 'approved'}
-          onClick={() => decide(approveJob)} title="Approve this job (same as the Telegram button)">
+          onClick={() => decide(approveJob)} title="Approve: applies with the safest method (logged as a dry run unless sending is enabled)">
           <Check size={14} /> {status === 'approved' ? 'Approved' : 'Approve'}
         </button>
         <button className="btn btn-outline" style={style} disabled={busy || status === 'skipped'}

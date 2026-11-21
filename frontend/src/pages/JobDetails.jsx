@@ -13,6 +13,7 @@ const JobDetails = () => {
   const [analysis, setAnalysis] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState(null);
+  const [application, setApplication] = useState(null);
 
   useEffect(() => {
     const loadJob = async () => {
@@ -97,7 +98,12 @@ const JobDetails = () => {
               {job.score}/10
             </div>
             <ApprovalBadge status={job.approval_status} />
-            <ApprovalControls job={job} onChange={(updated) => setJob(updated)} />
+            <ApprovalControls job={job} onChange={(updated, app) => { setJob(updated); setApplication(app); }} />
+            {application && (
+              <Link to="/applications" style={{ fontSize: '0.8rem' }}>
+                Application: {application.method}, {application.status.replace(/_/g, ' ')}
+              </Link>
+            )}
             <select 
               className="form-control" 
               value={job.status}
