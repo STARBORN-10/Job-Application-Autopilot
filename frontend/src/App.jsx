@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
+import BackendBanner from './components/BackendBanner';
 import Dashboard from './pages/Dashboard';
 import JobListings from './pages/JobListings';
 import JobDetails from './pages/JobDetails';
@@ -16,6 +17,7 @@ function App() {
       <div className="app-container">
         <Sidebar />
         <main className="main-content">
+          <BackendBanner />
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/jobs" element={<JobListings />} />
