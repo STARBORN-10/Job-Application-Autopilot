@@ -4,22 +4,25 @@
 
 An AI-powered full-stack application that automates job discovery, evaluates opportunities based on a candidate's profile, generates personalized cover letters, and organizes relevant jobs in a centralized dashboard.
 
-Built using **Make.com, Google Gemini, FastAPI, React, SQLite, and Telegram**, this project combines AI and workflow automation to reduce repetitive tasks in the job search process.
+The whole workflow runs **natively in the Python backend** (FastAPI + Google Gemini + JSearch + Telegram), with a React dashboard on top. It started on Make.com and has been migrated so no external automation tool is needed (the Make.com endpoints are kept for backwards compatibility).
 
 ---
 
 ## ✨ Features
 
-- 🔎 **Automated Job Discovery:** Fetch job listings through the IndianAPI jobs API.
-- 🧠 **AI-Powered Job Matching:** Uses Google Gemini to compare job requirements with a candidate's skills, projects, and career goals.
+- 🔎 **Automated Job Discovery:** Fetches listings from the JSearch API (RapidAPI) for your active role and preferred locations.
+- 🧠 **AI-Powered Job Matching:** Uses Google Gemini to compare job requirements with your resume, skills, and goals.
 - 🎯 **Smart Match Scoring:** Assigns a score from 0 to 10 with a short explanation of the match.
-- ✍️ **Personalized Cover Letters:** Generates job-specific cover letters using candidate and job information.
-- ⚡ **Workflow Automation:** Connects job discovery, AI evaluation, filtering, data storage, and notifications through Make.com.
-- 📊 **Interactive Dashboard:** A React-based interface for viewing and managing job opportunities.
-- 📬 **Telegram Notifications:** Delivers relevant job details, match scores, application links, and cover letters.
-- 🗂️ **Application Tracking:** Organizes job listings, cover letters, and application status.
-- 🔐 **Secure API:** Protects job creation with API key authentication.
-- 🔄 **REST API Integration:** Connects Make.com to the FastAPI backend and SQLite database.
+- ✍️ **Personalized Cover Letters:** Generates job-specific cover letters from your resume and the posting.
+- ⚡ **Native Automation Pipeline:** Discovery → duplicate & experience pre-filter → AI scoring → threshold → save → Telegram alert, with per-job fault isolation and a single-run lock.
+- 🔁 **Resilient:** Automatic retry with exponential backoff on timeouts and rate limits (JSearch, Gemini, Telegram).
+- ⏰ **Built-in Scheduler:** Set `AUTO_RUN_INTERVAL_MINUTES` to run the pipeline automatically; run status is available at `/api/automation/status`.
+- 📊 **Dashboard & Analytics:** React UI with live run results, application funnel, score distribution, jobs-over-time, top companies and sources.
+- 🔍 **Advanced Filtering:** Filter by text, score, experience, status, location, source and date; sort by newest, score or company.
+- 🧩 **Resume Fit & Skill Gaps:** One-click Gemini analysis of your resume against any job (matched skills, missing skills, resume tips).
+- 📥 **CSV Export:** Download all jobs as a spreadsheet-ready CSV.
+- 📬 **Telegram Notifications:** Sends job details, match scores, and links for qualifying jobs.
+- 🗂️ **Application Tracking:** Tracks status from To Apply through Offer/Rejected.
 
 > The system assists with job discovery and application preparation. It does not automatically submit job applications.
 
@@ -29,32 +32,28 @@ Built using **Make.com, Google Gemini, FastAPI, React, SQLite, and Telegram**, t
 
 ```mermaid
 flowchart TD
-    A[IndianAPI Jobs] --> B[Make.com Automation]
-    B --> C[Iterator]
-    C --> D[Google Gemini - Match Score]
-    D --> E[Parse JSON]
-    E --> F{Score >= 7?}
-    F -- No --> G[Skip Job]
-    F -- Yes --> H[Generate Cover Letter]
-    H --> I[Google Sheets]
-    H --> J[Telegram Notification]
-    H --> K[HTTP POST]
-    K --> L[FastAPI Backend]
-    L --> M[API Key Verification]
-    M --> N[SQLite Database]
-    N --> O[React Dashboard]
+    S[Scheduler / "Find New Jobs" button] --> P[Pipeline Orchestrator]
+    P --> A[JSearch API]
+    A --> D{Duplicate or too senior?}
+    D -- Yes --> X[Skip, no AI cost]
+    D -- No --> G[Gemini: score + cover letter]
+    G --> T{Score >= min score?}
+    T -- No --> X
+    T -- Yes --> DB[(Database)]
+    DB --> TG[Telegram alert]
+    DB --> API[FastAPI REST API]
+    API --> UI[React Dashboard]
 ```
 
 ### How It Works
 
-1. **Job Collection:** Make.com retrieves job listings from IndianAPI.
-2. **Data Processing:** The Iterator processes each job individually.
-3. **AI Evaluation:** Gemini evaluates the job against the candidate's profile and returns a structured score and match reason.
-4. **Filtering:** Jobs scoring 7 or higher pass through the configured filter.
-5. **Cover Letter Generation:** Gemini generates a personalized cover letter for each qualifying job.
-6. **Data Storage:** Job information and generated content are sent to Google Sheets and the FastAPI backend.
-7. **Notifications:** Telegram sends job details, match scores, application links, and cover letters.
-8. **Dashboard:** The React frontend displays and organizes job information retrieved through the backend API.
+1. **Trigger:** The scheduler, or the dashboard's "Find New Jobs" button, starts the pipeline in the background.
+2. **Discovery:** JSearch returns listings for your active role and locations.
+3. **Pre-filter:** Duplicates and jobs requiring too much experience are skipped before any AI call.
+4. **AI Evaluation:** Gemini scores the job against your active resume and writes a cover letter.
+5. **Threshold:** Only jobs at or above your minimum match score are kept.
+6. **Storage & Alerts:** Jobs are saved, then a Telegram alert is sent (a failed alert never loses a job).
+7. **Dashboard:** The UI shows the run result, job list, tracker, and analytics.
 
 ---
 
@@ -64,15 +63,13 @@ flowchart TD
 |---|---|
 | Frontend | React, Vite, JavaScript, CSS |
 | Backend | Python, FastAPI |
-| Database | SQLite, SQLAlchemy |
+| Database | SQLite (local) / PostgreSQL (production), SQLAlchemy |
 | AI / LLM | Google Gemini 2.5 Flash |
-| Automation | Make.com |
-| Job Data | IndianAPI |
+| Job Data | JSearch (RapidAPI) |
 | Notifications | Telegram Bot API |
-| Data Management | Google Sheets |
 | API Communication | REST API, HTTP, JSON |
-| Authentication | API Key |
-| Deployment | Render |
+| Authentication | API key for machine endpoints |
+| Deployment | Render (backend), Vercel (frontend) |
 | Version Control | Git, GitHub |
 
 ---
@@ -83,11 +80,17 @@ flowchart TD
 Job-Application-Autopilot/
 │
 ├── backend/
-│   ├── main.py
-│   ├── models.py
-│   ├── schemas.py
-│   ├── database.py
-│   ├── mock_data.py
+│   ├── main.py            # FastAPI app & endpoints
+│   ├── crud.py            # Database operations
+│   ├── models.py / schemas.py / database.py
+│   ├── services/
+│   │   ├── pipeline.py    # Automation orchestrator + run status
+│   │   ├── jsearch_service.py      # Job discovery
+│   │   ├── ai_service.py           # Gemini scoring, cover letters, fit analysis
+│   │   ├── notification_service.py # Telegram alerts
+│   │   ├── analytics.py            # Stats aggregation & CSV export
+│   │   └── retry.py                # Retry with exponential backoff
+│   ├── test_*.py          # Offline test scripts (run with python)
 │   └── requirements.txt
 │
 ├── frontend/
@@ -142,17 +145,30 @@ pip install -r requirements.txt
 
 ### 3. Configure Environment Variables
 
-Set the API key used to protect the job creation endpoint.
-
-Create a `.env` file if your local setup uses an environment variable loader, or configure the variable directly in your environment.
+Copy `backend/.env.example` to `backend/.env` and fill in your keys:
 
 ```env
-MAKE_API_KEY=your_secure_api_key
+RAPIDAPI_KEY=...          # JSearch job discovery
+GEMINI_API_KEY=...        # AI scoring, cover letters, fit analysis
+TELEGRAM_BOT_TOKEN=...    # optional alerts
+TELEGRAM_CHAT_ID=...
+MAKE_API_KEY=...          # only for the legacy /api/make/* and POST /api/jobs endpoints
+DATABASE_URL=sqlite:///./jobs.db
+AUTO_RUN_INTERVAL_MINUTES=360   # optional scheduler (0 = off)
 ```
 
-Use the same secret in the Make.com HTTP module's `x-api-key` header.
+Then upload a resume for your active role on the **Resumes** page and click **Find New Jobs** on the Dashboard.
 
 **Never upload real API keys, tokens, or credentials to GitHub.**
+
+### Run the Tests
+
+The tests are offline scripts (no live API calls). From `backend/`:
+
+```bash
+python test_pipeline.py && python test_features.py && python test_suite.py && python test_phase1.py
+python test_jsearch.py && python test_ai_service.py && python test_notification_service.py
+```
 
 ### 4. Run the Backend
 
@@ -215,9 +231,13 @@ The FastAPI backend provides REST endpoints for job management.
 | DELETE | `/api/resumes/{id}` | Delete a resume and its PDF from disk |
 | GET | `/api/settings` | Retrieve unified job search & automation settings |
 | PUT | `/api/settings` | Update settings (roles, min score, locations, webhook URL) |
-| POST | `/api/automation/trigger` | Dispatch one-click "Find New Jobs" trigger to Make.com Webhook |
+| POST | `/api/automation/trigger` | Start the native discovery pipeline in the background (`already_running` if busy) |
+| GET | `/api/automation/status` | Whether the pipeline is running + summary of the last run |
+| GET | `/api/analytics?days=30` | Funnel, score distribution, jobs-over-time, top companies, sources |
+| GET | `/api/export/jobs.csv` | Download all jobs as CSV |
+| POST | `/api/jobs/{id}/analyze` | Gemini skill-gap analysis of the active resume vs. this job |
 
-For full automation scenario architecture and configuration, see [Make.com Automation Guide](docs/make_automation_guide.md).
+The Make.com guide ([docs/make_automation_guide.md](docs/make_automation_guide.md)) is kept for reference only; the native pipeline replaces it.
 For hosting and cloud persistence guidelines, see [Production Deployment Guide](docs/deployment.md).
 
 ### Example: Create a Job
@@ -302,15 +322,17 @@ The React frontend can be run locally using Vite. To publish it, deploy it separ
 
 ## 🚧 Future Enhancements
 
-- [ ] Persistent cloud database integration
-- [ ] Job deduplication to prevent repeated listings
-- [ ] Advanced filtering by role, location, salary, and experience
-- [ ] Resume upload and profile customization
-- [ ] Resume-to-job compatibility analysis
-- [ ] Application progress analytics and visualizations
-- [ ] Improved error handling and retry mechanisms
+- [x] Native Python pipeline replacing Make.com
+- [x] Job deduplication to prevent repeated listings
+- [x] Advanced filtering (text, score, experience, status, location, source, date) and sorting
+- [x] Resume upload per target role
+- [x] Resume-to-job compatibility analysis
+- [x] Application progress analytics and visualizations
+- [x] Retry with backoff and run-status reporting
+- [x] Built-in scheduler and CSV export
+- [ ] Persistent cloud database (PostgreSQL supported via `DATABASE_URL`; needs a hosted instance)
+- [ ] Salary filtering (needs a new database column and a migration tool)
 - [ ] Integration with additional job sources
-- [ ] Production deployment of the React dashboard
 - [ ] User authentication and multi-profile support
 
 ---

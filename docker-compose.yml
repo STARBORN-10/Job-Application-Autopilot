@@ -14,6 +14,11 @@ services:
       - DATABASE_URL=${DATABASE_URL:-sqlite:///./jobs.db}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:5173,http://localhost:3000}
       - MAKE_WEBHOOK_URL=${MAKE_WEBHOOK_URL:-}
+      - RAPIDAPI_KEY=${RAPIDAPI_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - AUTO_RUN_INTERVAL_MINUTES=${AUTO_RUN_INTERVAL_MINUTES:-0}
     volumes:
       - backend_uploads:/app/uploads
       - backend_db:/app

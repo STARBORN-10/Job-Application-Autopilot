@@ -1,3 +1,5 @@
+> **LEGACY:** The Make.com workflow has been replaced by the native Python pipeline (see `docs/architecture.md`). This guide is kept for reference only.
+
 # 🤖 Make.com Automation Setup Guide
 
 This guide provides step-by-step instructions for building the end-to-end automation scenario in [Make.com](https://www.make.com/) for the **Job Application Autopilot**.

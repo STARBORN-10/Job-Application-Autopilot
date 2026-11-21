@@ -12,7 +12,8 @@ def get_job(db: Session, job_id: int):
     return db.query(models.Job).filter(models.Job.id == job_id).first()
 
 def get_jobs(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.Job).offset(skip).limit(limit).all()
+    # Newest first, so a limit never hides the most recently found jobs.
+    return db.query(models.Job).order_by(models.Job.id.desc()).offset(skip).limit(limit).all()
 
 def create_job(db: Session, job: schemas.JobCreate):
     db_job = models.Job(**job.model_dump())

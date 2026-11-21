@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import JobListings from './pages/JobListings';
 import JobDetails from './pages/JobDetails';
 import Tracker from './pages/Tracker';
+import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
 import ResumeManager from './pages/ResumeManager';
 import './index.css';
@@ -20,6 +21,7 @@ function App() {
             <Route path="/jobs" element={<JobListings />} />
             <Route path="/jobs/:id" element={<JobDetails />} />
             <Route path="/tracker" element={<Tracker />} />
+            <Route path="/analytics" element={<Analytics />} />
             <Route path="/resumes" element={<ResumeManager />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>

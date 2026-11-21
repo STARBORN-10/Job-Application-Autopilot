@@ -110,7 +110,7 @@ class GeneralSettings(BaseModel):
 
 
 class AutomationTriggerResponse(BaseModel):
-    """Response returned when triggering Make.com automation."""
+    """Response returned when triggering the automation pipeline."""
     status: str
     message: str
     details: Optional[dict] = None

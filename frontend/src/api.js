@@ -5,10 +5,27 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
 // ---------------------------------------------------------------------------
 
 export const fetchJobs = async () => {
-  const response = await fetch(`${API_URL}/jobs`);
+  const response = await fetch(`${API_URL}/jobs?limit=2000`);
   if (!response.ok) throw new Error('Failed to fetch jobs');
   return response.json();
 };
+
+export const fetchAnalytics = async (days = 30) => {
+  const response = await fetch(`${API_URL}/analytics?days=${days}`);
+  if (!response.ok) throw new Error('Failed to fetch analytics');
+  return response.json();
+};
+
+export const analyzeJob = async (id) => {
+  const response = await fetch(`${API_URL}/jobs/${id}/analyze`, { method: 'POST' });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Analysis failed' }));
+    throw new Error(err.detail || 'Analysis failed');
+  }
+  return response.json();
+};
+
+export const EXPORT_CSV_URL = `${API_URL}/export/jobs.csv`;
 
 export const fetchJob = async (id) => {
   const response = await fetch(`${API_URL}/jobs/${id}`);
@@ -156,6 +173,12 @@ export const updateGeneralSettings = async (data) => {
 // ---------------------------------------------------------------------------
 // Automation Webhook Trigger
 // ---------------------------------------------------------------------------
+
+export const fetchAutomationStatus = async () => {
+  const response = await fetch(`${API_URL}/automation/status`);
+  if (!response.ok) throw new Error('Failed to fetch automation status');
+  return response.json();
+};
 
 export const triggerAutomation = async () => {
   const response = await fetch(`${API_URL}/automation/trigger`, {

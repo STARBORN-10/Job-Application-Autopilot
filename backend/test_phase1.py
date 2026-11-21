@@ -256,7 +256,7 @@ def run_tests():
         "experience": "Fresher",
     }
     r = client.post("/api/jobs", json=dup_url_job, headers=AUTH_HEADER)
-    assert_test(r.status_code == 409, "Duplicate job by exact URL rejected (HTTP 409)")
+    assert_test(r.status_code == 200, "Duplicate job by exact URL returns existing job (HTTP 200, idempotent)")
 
     # 4.2 Duplicate by normalized URL (trailing slash)
     dup_slash_job = {
@@ -266,7 +266,7 @@ def run_tests():
         "experience": "Fresher",
     }
     r = client.post("/api/jobs", json=dup_slash_job, headers=AUTH_HEADER)
-    assert_test(r.status_code == 409, "Duplicate job with trailing slash URL rejected (HTTP 409)")
+    assert_test(r.status_code == 200, "Duplicate job with trailing slash URL returns existing job (HTTP 200, idempotent)")
 
     # 4.3 Fallback duplicate detection by Title + Company (no URL provided)
     job_no_url_1 = {
@@ -288,7 +288,7 @@ def run_tests():
         "score": 8.0,
     }
     r2 = client.post("/api/jobs", json=job_no_url_dup, headers=AUTH_HEADER)
-    assert_test(r2.status_code == 409, "Duplicate job by Title + Company fallback rejected (HTTP 409)")
+    assert_test(r2.status_code == 200, "Duplicate job by Title + Company fallback returns existing job (HTTP 200, idempotent)")
 
     # Different title or company without URL -> accepted
     job_no_url_diff = {

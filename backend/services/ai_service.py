@@ -232,14 +232,23 @@ def evaluate_job(
         max_years_experience=max_years_experience,
     )
 
-    # 3. Model Invocation
+    # 3. Model Invocation + 4. Extract and validate output
+    raw_response_text = _generate_json_text(prompt, AIEvaluationResult, model_name, client)
+    return parse_and_validate_ai_response(raw_response_text)
+
+
+def _generate_json_text(prompt: str, response_schema: Any, model_name: str, client: Optional[Any] = None) -> str:
+    """
+    Calls Gemini for a JSON response and returns the raw text.
+    Maps SDK/network failures onto the AIError hierarchy (rate limit, auth, timeout).
+    """
     try:
         active_client = client if client is not None else genai.Client(api_key=get_gemini_api_key())
 
         config = types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION,
             response_mime_type="application/json",
-            response_schema=AIEvaluationResult,
+            response_schema=response_schema,
             temperature=DEFAULT_TEMPERATURE,
         )
 
@@ -257,6 +266,9 @@ def evaluate_job(
         code = getattr(exc, "code", None)
         if code == 429 or "RESOURCE_EXHAUSTED" in err_msg or "rate limit" in err_msg.lower():
             raise AIRateLimitError(f"Gemini API rate limit exceeded: {err_msg}")
+        if code in (500, 502, 503, 504) or "UNAVAILABLE" in err_msg:
+            # Temporary server-side overload ("high demand"): mapped to a retryable error.
+            raise AITimeoutError(f"Gemini temporarily unavailable ({code}): {err_msg[:160]}")
         if code in (401, 403) or "API_KEY_INVALID" in err_msg or "unauthorized" in err_msg.lower():
             raise AIAuthError("Gemini authentication failed. Verify GEMINI_API_KEY is valid.")
         raise AIError(f"Gemini API error ({code}): {err_msg}")
@@ -272,7 +284,6 @@ def evaluate_job(
             raise AIRateLimitError(f"Gemini quota/rate limit error: {exc}")
         raise AIError(f"Unexpected error calling Gemini API: {exc}")
 
-    # 4. Extract and validate output
     raw_response_text = getattr(response, "text", None)
     if not raw_response_text and hasattr(response, "candidates") and response.candidates:
         # Fallback extraction from candidate content parts
@@ -280,4 +291,76 @@ def evaluate_job(
         if parts:
             raw_response_text = getattr(parts[0], "text", None)
 
-    return parse_and_validate_ai_response(raw_response_text or "")
+    return raw_response_text or ""
+
+
+# ---------------------------------------------------------------------------
+# Resume-to-Job Compatibility Analysis (on demand, not persisted)
+# ---------------------------------------------------------------------------
+class CompatibilityAnalysis(BaseModel):
+    """Structured skill-gap analysis between a resume and a job posting."""
+    summary: str
+    matched_skills: list[str] = Field(default_factory=list)
+    missing_skills: list[str] = Field(default_factory=list)
+    resume_suggestions: list[str] = Field(default_factory=list)
+
+
+def build_compatibility_prompt(job_title: str, company: str, job_description: str, resume_text: str) -> str:
+    return f"""Candidate Resume:
+{resume_text}
+
+Job Opportunity:
+Title: {job_title}
+Company: {company}
+Job Description:
+{job_description}
+
+Compare the resume to the job. Return ONLY a raw JSON object with this exact structure:
+{{
+  "summary": "<2-3 sentence honest assessment of fit>",
+  "matched_skills": ["<skill or requirement the resume clearly demonstrates>", ...],
+  "missing_skills": ["<skill or requirement the job asks for that the resume does not show>", ...],
+  "resume_suggestions": ["<specific, truthful edit to make the resume better target this job>", ...]
+}}
+Only list skills actually supported by the resume as matched. Do not invent experience."""
+
+
+def parse_compatibility_response(raw_text: str) -> CompatibilityAnalysis:
+    if not raw_text or not raw_text.strip():
+        raise AIResponseFormatError("Received empty response from AI model.")
+    cleaned = raw_text.strip()
+    if "```" in cleaned:
+        match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', cleaned)
+        if match:
+            cleaned = match.group(1).strip()
+    try:
+        data = json.loads(cleaned)
+        if not isinstance(data, dict):
+            raise ValueError("not a JSON object")
+        analysis = CompatibilityAnalysis(**data)
+    except (json.JSONDecodeError, ValueError, TypeError) as exc:
+        raise AIResponseFormatError(f"Invalid compatibility analysis from AI: {exc}")
+    if not analysis.summary.strip():
+        raise AIResponseFormatError("Missing 'summary' in compatibility analysis.")
+    return analysis
+
+
+def analyze_compatibility(
+    job_title: str,
+    company: str,
+    job_description: str,
+    resume_text: str,
+    client: Optional[Any] = None,
+) -> CompatibilityAnalysis:
+    """Skill-gap analysis of a resume against one job posting (matched/missing skills + resume tips)."""
+    if not resume_text or not resume_text.strip():
+        raise AIValidationError("Candidate resume text is empty. Upload a resume before running analysis.")
+    if not job_description or not job_description.strip():
+        raise AIValidationError("Job description is empty. Cannot analyze an empty job description.")
+
+    prompt = build_compatibility_prompt(
+        (job_title or "Position").strip(), (company or "Company").strip(),
+        job_description.strip(), resume_text.strip(),
+    )
+    raw = _generate_json_text(prompt, CompatibilityAnalysis, get_gemini_model_name(), client)
+    return parse_compatibility_response(raw)

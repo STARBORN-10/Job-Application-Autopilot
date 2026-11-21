@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { fetchJob, updateJob, deleteJob } from '../api';
-import { ArrowLeft, ExternalLink, Trash2 } from 'lucide-react';
+import { fetchJob, updateJob, deleteJob, analyzeJob } from '../api';
+import { ArrowLeft, ExternalLink, Trash2, Sparkles } from 'lucide-react';
 
 const JobDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [analysis, setAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState(null);
 
   useEffect(() => {
     const loadJob = async () => {
@@ -30,6 +33,18 @@ const JobDetails = () => {
       setJob(updated);
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleAnalyze = async () => {
+    setAnalyzing(true);
+    setAnalysisError(null);
+    try {
+      setAnalysis(await analyzeJob(id));
+    } catch (err) {
+      setAnalysisError(err.message);
+    } finally {
+      setAnalyzing(false);
     }
   };
 
@@ -118,6 +133,47 @@ const JobDetails = () => {
           <div style={{ padding: '1rem', backgroundColor: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', opacity: 0.9 }}>
             {job.match_reason}
           </div>
+        </div>
+
+        <div style={{ marginBottom: '2rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <h3 className="card-title" style={{ margin: 0 }}>Resume Fit &amp; Skill Gaps</h3>
+            <button className="btn btn-outline" onClick={handleAnalyze} disabled={analyzing}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
+              {analyzing ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Sparkles size={15} />}
+              {analyzing ? 'Analyzing…' : analysis ? 'Re-analyze' : 'Analyze Fit'}
+            </button>
+          </div>
+
+          {analysisError && (
+            <div style={{ marginTop: '0.75rem', color: 'var(--danger)', fontSize: '0.875rem' }}>{analysisError}</div>
+          )}
+
+          {analysis && (
+            <div style={{ marginTop: '1rem', padding: '1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)' }}>
+              <p style={{ marginTop: 0, lineHeight: 1.6 }}>{analysis.summary}</p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+                <div>
+                  <div className="stat-label" style={{ color: 'var(--success)' }}>You have</div>
+                  <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', fontSize: '0.875rem', lineHeight: 1.6 }}>
+                    {analysis.matched_skills.length ? analysis.matched_skills.map((s, i) => <li key={i}>{s}</li>) : <li>—</li>}
+                  </ul>
+                </div>
+                <div>
+                  <div className="stat-label" style={{ color: 'var(--danger)' }}>Missing</div>
+                  <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', fontSize: '0.875rem', lineHeight: 1.6 }}>
+                    {analysis.missing_skills.length ? analysis.missing_skills.map((s, i) => <li key={i}>{s}</li>) : <li>—</li>}
+                  </ul>
+                </div>
+                <div>
+                  <div className="stat-label" style={{ color: 'var(--primary)' }}>Resume tips</div>
+                  <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.1rem', fontSize: '0.875rem', lineHeight: 1.6 }}>
+                    {analysis.resume_suggestions.length ? analysis.resume_suggestions.map((s, i) => <li key={i}>{s}</li>) : <li>—</li>}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: '2rem' }}>
