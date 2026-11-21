@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { fetchGeneralSettings, updateGeneralSettings, triggerAutomation } from '../api';
 import SourcesSettings from '../components/SourcesSettings';
+import ScoringSettings from '../components/ScoringSettings';
 import {
   Save,
   CheckCircle,
@@ -268,6 +269,44 @@ const Settings = () => {
           </div>
         </div>
 
+        {/* Section 2b: Hard filters */}
+        <div className="card" style={{ maxWidth: '850px', marginBottom: '2rem' }}>
+          <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <SlidersHorizontal size={20} color="var(--primary)" />
+            Hard Filters
+          </h2>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+            Jobs failing any of these are dropped before scoring (no AI cost). Leave a field empty for no restriction.
+            Jobs clearly outside your preferred locations are dropped too; an unclear location is never dropped.
+          </p>
+          <div className="form-group">
+            <label className="form-label">Preferred job types</label>
+            <input type="text" className="form-control" placeholder="e.g. Full-time, Internship"
+              value={settings.preferred_job_types || ''}
+              onChange={(e) => setSettings({ ...settings, preferred_job_types: e.target.value })} />
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              Comma-separated: Full-time, Part-time, Internship, Contract, Temporary. A job whose type is not stated is kept.
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Blocked companies</label>
+              <input type="text" className="form-control" placeholder="e.g. Some Staffing Agency"
+                value={settings.blocked_companies || ''}
+                onChange={(e) => setSettings({ ...settings, blocked_companies: e.target.value })} />
+            </div>
+            <div className="form-group" style={{ margin: 0 }}>
+              <label className="form-label">Blocked keywords</label>
+              <input type="text" className="form-control" placeholder="e.g. unpaid, night shift, sales"
+                value={settings.blocked_keywords || ''}
+                onChange={(e) => setSettings({ ...settings, blocked_keywords: e.target.value })} />
+            </div>
+          </div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
+            Comma-separated, case-insensitive, whole words. Keywords are matched in the title and description.
+          </div>
+        </div>
+
         {/* Section 3: Make.com Automation Integration */}
         <div className="card" style={{ maxWidth: '850px', marginBottom: '2rem' }}>
           <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -347,6 +386,7 @@ const Settings = () => {
       </form>
 
       <div style={{ marginTop: '2.5rem' }}>
+        <ScoringSettings />
         <SourcesSettings />
       </div>
     </div>

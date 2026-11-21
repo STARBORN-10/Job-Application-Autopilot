@@ -263,3 +263,5 @@ export const fetchAtsCompanies = () => jsonRequest(`${API_URL}/settings/ats-comp
 export const updateAtsCompanies = (companies) =>
   jsonRequest(`${API_URL}/settings/ats-companies`, 'PUT', { companies });
 export const fetchAiProviders = () => jsonRequest(`${API_URL}/ai/providers`);
+export const fetchScoringWeights = () => jsonRequest(`${API_URL}/scoring/weights`);
+export const updateScoringWeights = (weights) => jsonRequest(`${API_URL}/scoring/weights`, 'PUT', { weights });

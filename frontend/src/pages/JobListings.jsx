@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { fetchJobs, updateJob, EXPORT_CSV_URL } from '../api';
 import { Link } from 'react-router-dom';
 import { Search, MapPin, Download } from 'lucide-react';
+import { ScoreBreakdownCompact } from '../components/ScoreBreakdown';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -190,6 +191,7 @@ const JobListings = () => {
                   <span>•</span>
                   <span>Score: <strong className={`score-${job.score >= 8 ? 'high' : job.score >= 5 ? 'medium' : 'low'}`}>{job.score}/10</strong></span>
                 </div>
+                <ScoreBreakdownCompact breakdown={job.score_breakdown} />
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                   {job.match_reason}
                 </p>

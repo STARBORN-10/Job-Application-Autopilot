@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { fetchJob, updateJob, deleteJob, analyzeJob } from '../api';
 import { ArrowLeft, ExternalLink, Trash2, Sparkles } from 'lucide-react';
+import ScoreBreakdown from '../components/ScoreBreakdown';
 
 const JobDetails = () => {
   const { id } = useParams();
@@ -119,8 +120,10 @@ const JobDetails = () => {
             <div style={{ fontWeight: '500' }}>{job.experience || 'N/A'}</div>
           </div>
           <div>
-            <div className="stat-label">Source</div>
-            <div style={{ fontWeight: '500' }}>{job.source || 'N/A'}</div>
+            <div className="stat-label">Source{job.source_names?.length > 1 ? 's' : ''}</div>
+            <div style={{ fontWeight: '500' }}>
+              {job.source_names?.length ? job.source_names.join(', ') : job.source || 'N/A'}
+            </div>
           </div>
           <div>
             <div className="stat-label">Found On</div>
@@ -129,10 +132,15 @@ const JobDetails = () => {
         </div>
 
         <div style={{ marginBottom: '2rem' }}>
-          <h3 className="card-title">AI Match Analysis</h3>
+          <h3 className="card-title">Match Analysis</h3>
           <div style={{ padding: '1rem', backgroundColor: 'var(--primary)', color: 'white', borderRadius: 'var(--radius-md)', opacity: 0.9 }}>
             {job.match_reason}
           </div>
+        </div>
+
+        <div style={{ marginBottom: '2rem' }}>
+          <h3 className="card-title">Score Breakdown</h3>
+          <ScoreBreakdown breakdown={job.score_breakdown} />
         </div>
 
         <div style={{ marginBottom: '2rem' }}>

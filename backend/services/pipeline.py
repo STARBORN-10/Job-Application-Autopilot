@@ -3,26 +3,34 @@ Pipeline Orchestrator Service Module
 
 One run:
 1. Concurrency protection (one run at a time)
-2. Settings and the active resume
+2. Settings, the active resume and its cached candidate profile
 3. Every enabled source, each isolated (services/sources/runner.py)
 4. Cross-source de-duplication (services/dedupe.py)
 5. Database duplicate check (known jobs only get last_seen / source_names updated)
-6. Experience filter, then AI evaluation and the minimum-score filter
-7. Save, then (strictly after the commit) a Telegram alert
-8. The run summary is kept in memory and persisted to app_settings, so it survives restarts
+6. Hard filters (experience, location, job type, blocked company/keyword) - no AI cost
+7. Cheap keyword pre-score for every job; only the top LLM_MAX_JOBS_PER_RUN (default 15) get
+   AI fact extraction, a re-score and (if they pass the minimum score) an AI cover letter
+8. Save with the score breakdown, then (strictly after the commit) a Telegram alert
+9. The run summary is kept in memory and persisted to app_settings, so it survives restarts
 """
 
+import os
 import re
 import logging
 import threading
 import datetime
+from collections import Counter
 from typing import Optional, Dict, Any
 
 import crud
 import schemas
 from database import SessionLocal
-from services import ai_service, dedupe, geo, jsearch_service, notification_service
+from services import dedupe, geo, jsearch_service, llm, notification_service
 from services.retry import retry_call
+from services.scoring import facts as facts_mod, profile as profile_mod, weights as weights_mod
+from services.scoring.engine import score_job
+from services.scoring.filters import first_failure, run_hard_filters
+from services.scoring.writer import write_cover_letter
 from services.sources import registry
 from services.sources.base import SourceQuery
 from services.sources.runner import run_sources
@@ -30,7 +38,6 @@ from services.sources.runner import run_sources
 logger = logging.getLogger("pipeline_orchestrator")
 logger.setLevel(logging.INFO)
 
-_AI_TRANSIENT = (ai_service.AITimeoutError, ai_service.AIRateLimitError, ai_service.AIResponseFormatError)
 _TELEGRAM_TRANSIENT = (notification_service.TelegramNetworkError, notification_service.TelegramRateLimitError)
 
 STATUS_SETTINGS_KEY = "pipeline_status"
@@ -120,13 +127,24 @@ def _new_summary() -> Dict[str, Any]:
         "merged_duplicates": 0,
         "duplicates_skipped": 0,
         "experience_filtered": 0,
-        "ai_evaluated": 0,
+        "filtered": {},            # other hard filters: {"location": n, "job_type": n, ...}
+        "ai_evaluated": 0,         # jobs whose facts were extracted by AI
+        "ai_errors": 0,
+        "cover_letters": 0,
+        "profile_source": None,
         "saved": 0,
         "notified": 0,
         "failed": 0,
         "sources": {},
         "details": [],
     }
+
+
+def llm_jobs_per_run() -> int:
+    try:
+        return max(0, int(os.getenv("LLM_MAX_JOBS_PER_RUN", "15")))
+    except ValueError:
+        return 15
 
 
 def build_query(settings: schemas.GeneralSettings) -> SourceQuery:
@@ -141,11 +159,10 @@ def build_query(settings: schemas.GeneralSettings) -> SourceQuery:
 # ---------------------------------------------------------------------------
 # Pipeline Orchestrator Core
 # ---------------------------------------------------------------------------
-def _run(db, summary: Dict[str, Any], http_client, ai_client, telegram_client, only_sources) -> None:
+def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources) -> None:
     settings = crud.get_general_settings(db)
     active_role = settings.active_role or "AI/ML Engineer"
     min_match_score = settings.min_match_score if settings.min_match_score is not None else 7.0
-    max_years_experience = settings.max_years_experience
     summary["active_role"] = active_role
 
     active_resume = crud.get_active_resume_for_role(db, active_role)
@@ -176,75 +193,115 @@ def _run(db, summary: Dict[str, Any], http_client, ai_client, telegram_client, o
     summary["merged_duplicates"] = merged
     logger.info(f"Pipeline fetched {len(fetched.jobs)} jobs ({len(jobs)} unique) for role '{active_role}'.")
 
+    profile = profile_mod.get_profile(db, active_resume, active_role, settings.target_roles)
+    summary["profile_source"] = profile.source
+    weights = weights_mod.get_weights(db)
+    filtered = Counter()
+
+    # --- Pass 1 (no AI): database duplicates, hard filters, keyword pre-score
+    candidates = []
     for job in jobs:
-        job_title = job.title or "Unknown Role"
-        job_company = job.company or "Unknown Company"
         try:
-            # A: database duplicate check (zero AI cost)
             duplicate = crud.find_duplicate_job(db, job)
             if duplicate:
                 crud.touch_existing_job(db, duplicate, job.source_names or [job.source])
                 summary["duplicates_skipped"] += 1
-                summary["details"].append({"title": job_title, "company": job_company, "status": "duplicate_skipped",
-                                           "reason": f"Already exists in database (ID: {duplicate.id})"})
+                _detail(summary, job, "duplicate_skipped", reason=f"Already exists in database (ID: {duplicate.id})")
                 continue
+            facts = facts_mod.heuristic_facts(job)
+            filters = run_hard_filters(job, settings, _min_years(job, facts))
+            if _filtered_out(summary, filtered, job, filters):
+                continue
+            candidates.append((job, facts, filters, score_job(job, facts, profile, settings, weights, filters)))
+        except Exception as item_exc:
+            _failed(summary, db, job, item_exc)
 
-            # B: experience filter (zero AI cost)
-            if settings.filter_enabled:
-                min_years = extract_minimum_experience_years(job.experience)
-                if min_years is not None and min_years > max_years_experience:
-                    summary["experience_filtered"] += 1
-                    summary["details"].append({"title": job_title, "company": job_company,
-                                               "status": "experience_filtered",
-                                               "reason": f"Requires {min_years:g}y, exceeding max {max_years_experience}y"})
-                    continue
+    # --- Pass 2: AI facts + cover letters for the most promising jobs only (cost control)
+    candidates.sort(key=lambda c: c[3].score, reverse=True)
+    ai_budget = llm_jobs_per_run() if llm.available_providers() else 0
+    for rank, (job, facts, filters, result) in enumerate(candidates):
+        try:
+            use_ai = rank < ai_budget
+            if use_ai:
+                try:
+                    facts = facts_mod.llm_facts(job, fallback=facts)
+                    summary["ai_evaluated"] += 1
+                    filters = run_hard_filters(job, settings, _min_years(job, facts))
+                    if _filtered_out(summary, filtered, job, filters):
+                        continue
+                    result = score_job(job, facts, profile, settings, weights, filters)
+                except llm.LLMError as exc:
+                    summary["ai_errors"] += 1
+                    use_ai = False
+                    logger.warning(f"AI facts unavailable for '{job.title}', keeping the keyword score: {exc}")
 
-            # C: AI evaluation
-            eval_result = retry_call(
-                lambda: ai_service.evaluate_job(
-                    job_title=job_title, company=job_company, job_description=job.description or "",
-                    resume_text=resume_text, active_role=active_role,
-                    max_years_experience=max_years_experience, client=ai_client,
-                ),
-                retry_on=_AI_TRANSIENT,
-                label=f"Gemini evaluation ({job_title})",
-            )
-            summary["ai_evaluated"] += 1
-            job.score = eval_result.score
-            job.match_reason = eval_result.match_reason
-            job.cover_letter = eval_result.cover_letter
-
-            # D: minimum score
+            job.score = result.score
+            job.score_breakdown = result.breakdown
+            job.match_reason = result.match_reason
             if job.score < min_match_score:
-                summary["details"].append({"title": job_title, "company": job_company, "status": "score_below_threshold",
-                                           "score": job.score,
-                                           "reason": f"Score {job.score:.1f} below minimum threshold {min_match_score:.1f}"})
+                _detail(summary, job, "score_below_threshold", score=job.score,
+                        reason=f"Score {job.score:.1f} below minimum threshold {min_match_score:.1f}")
                 continue
 
-            # E/F: save, then notify
+            if use_ai:
+                try:
+                    job.cover_letter, _provider = write_cover_letter(job, resume_text, profile)
+                    summary["cover_letters"] += 1
+                except llm.LLMError as exc:
+                    logger.warning(f"Cover letter not generated for '{job.title}': {exc}")
+
             saved_job = crud.create_job(db=db, job=job)
             summary["saved"] += 1
             notified = _notify(saved_job, telegram_client)
             summary["notified"] += int(notified)
-            summary["details"].append({"title": saved_job.title, "company": saved_job.company, "status": "saved",
-                                       "job_id": saved_job.id, "score": saved_job.score, "notified": notified})
+            _detail(summary, saved_job, "saved", job_id=saved_job.id, score=saved_job.score, notified=notified)
         except Exception as item_exc:
-            summary["failed"] += 1
-            logger.error(f"Error processing job '{job_title}' at '{job_company}': {item_exc}")
-            summary["details"].append({"title": job_title, "company": job_company, "status": "failed",
-                                       "error": str(item_exc)})
-            try:
-                db.rollback()
-            except Exception:
-                pass
+            _failed(summary, db, job, item_exc)
+
+    summary["filtered"] = dict(filtered)
 
     summary["status"] = "success"
     summary["message"] = (
         f"Job automation complete: {summary['saved']} new qualifying jobs saved, "
         f"{summary['notified']} alerts sent, {summary['duplicates_skipped']} duplicates skipped, "
         f"{summary['merged_duplicates']} cross-source duplicates merged, "
-        f"{summary['experience_filtered']} filtered by experience."
+        f"{summary['experience_filtered']} filtered by experience, "
+        f"{sum(summary['filtered'].values())} by other filters, {summary['ai_evaluated']} scored with AI facts."
     )
+
+
+def _min_years(job, facts) -> Optional[float]:
+    """Explicit experience field first (V1 rule); otherwise the (verified) facts."""
+    explicit = extract_minimum_experience_years(job.experience)
+    return explicit if explicit is not None else facts.min_years
+
+
+def _detail(summary: Dict[str, Any], job, status: str, **extra) -> None:
+    summary["details"].append({"title": job.title or "Unknown Role", "company": job.company or "Unknown Company",
+                               "status": status, **extra})
+
+
+def _filtered_out(summary: Dict[str, Any], counter: Counter, job, filters) -> bool:
+    failure = first_failure(filters)
+    if failure is None:
+        return False
+    if failure.name == "experience":
+        summary["experience_filtered"] += 1
+        _detail(summary, job, "experience_filtered", reason=failure.detail)
+    else:
+        counter[failure.name] += 1
+        _detail(summary, job, f"filtered_{failure.name}", reason=failure.detail)
+    return True
+
+
+def _failed(summary: Dict[str, Any], db, job, exc: Exception) -> None:
+    summary["failed"] += 1
+    logger.error(f"Error processing job '{job.title}' at '{job.company}': {exc}")
+    _detail(summary, job, "failed", error=str(exc))
+    try:
+        db.rollback()
+    except Exception:
+        pass
 
 
 def _notify(saved_job, telegram_client) -> bool:
@@ -268,18 +325,15 @@ def _notify(saved_job, telegram_client) -> bool:
 def _execute_pipeline(
     db_session: Optional[Any] = None,
     session_factory=SessionLocal,
-    jsearch_client: Optional[Any] = None,
-    ai_client: Optional[Any] = None,
     telegram_client: Optional[Any] = None,
-    num_pages: int = 1,
     http_client: Optional[Any] = None,
     only_sources: Optional[list] = None,
     started_at: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Executes one pipeline run with single-run locking and isolated DB session cleanup.
-    `jsearch_client` is kept for V1 compatibility; `http_client` is shared by all sources.
-    `num_pages` is kept for V1 compatibility (sources fetch one page each to protect quotas).
+    `http_client` (optional, e.g. a mocked httpx.Client) is shared by all sources;
+    `only_sources` restricts the run to the named sources.
     """
     if not _pipeline_lock.acquire(blocking=False):
         logger.warning("Pipeline run rejected: another automation run is already in progress.")
@@ -295,7 +349,7 @@ def _execute_pipeline(
             db = session_factory()
             managed_session = True
         try:
-            _run(db, summary, http_client or jsearch_client, ai_client, telegram_client, only_sources)
+            _run(db, summary, http_client, telegram_client, only_sources)
         except Exception as exc:
             logger.exception("Pipeline run failed")
             summary["status"] = "error"
@@ -360,10 +414,7 @@ def get_pipeline_status(db: Optional[Any] = None) -> Dict[str, Any]:
 def run_automation_pipeline(
     db_session: Optional[Any] = None,
     session_factory=SessionLocal,
-    jsearch_client: Optional[Any] = None,
-    ai_client: Optional[Any] = None,
     telegram_client: Optional[Any] = None,
-    num_pages: int = 1,
     http_client: Optional[Any] = None,
     only_sources: Optional[list] = None,
 ) -> Dict[str, Any]:
@@ -376,10 +427,7 @@ def run_automation_pipeline(
         summary = _execute_pipeline(
             db_session=db_session,
             session_factory=session_factory,
-            jsearch_client=jsearch_client,
-            ai_client=ai_client,
             telegram_client=telegram_client,
-            num_pages=num_pages,
             http_client=http_client,
             only_sources=only_sources,
             started_at=started,

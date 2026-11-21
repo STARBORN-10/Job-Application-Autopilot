@@ -27,6 +27,7 @@ from security import trigger_cooldown
 from services.pipeline import run_automation_pipeline, get_pipeline_status
 from services import ai_service, analytics as analytics_service, llm
 from services.retry import retry_call
+from services.scoring import weights as scoring_weights
 from services.sources import registry as source_registry
 
 logger = logging.getLogger("job_autopilot")
@@ -690,6 +691,23 @@ def update_ats_companies(payload: schemas.AtsCompanyList, db: Session = Depends(
         c["name"] = c.get("name") or c["token"]
     source_registry.set_ats_companies(db, companies)
     return {"companies": companies}
+
+
+@app.get("/api/scoring/weights")
+def get_scoring_weights(db: Session = Depends(get_db)):
+    """Current score weights (percent per part, sum 100) and the defaults."""
+    return {"weights": scoring_weights.get_weights(db), "defaults": scoring_weights.DEFAULT_WEIGHTS,
+            "parts": list(scoring_weights.PARTS)}
+
+
+@app.put("/api/scoring/weights")
+def update_scoring_weights(payload: dict, db: Session = Depends(get_db)):
+    """Set the weights; they must be whole numbers 0-100 that add up to 100. Applies to future scores."""
+    try:
+        weights = scoring_weights.set_weights(db, payload.get("weights", payload))
+    except scoring_weights.WeightsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"weights": weights, "defaults": scoring_weights.DEFAULT_WEIGHTS, "parts": list(scoring_weights.PARTS)}
 
 
 @app.get("/api/ai/providers")
