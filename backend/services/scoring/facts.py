@@ -119,8 +119,9 @@ def _facts_prompt(job) -> str:
         f"{note}Title: {job.title}\nCompany: {job.company}\nLocation: {job.location}\n"
         f"Experience field: {job.experience or 'not given'}\n"
         f"Description:\n{(job.description or '')[:DESCRIPTION_PROMPT_CHARS]}\n\n"
-        'Return JSON: {"required_skills": [skills the posting requires], '
-        '"nice_to_have_skills": [skills marked preferred/bonus/nice to have], '
+        'Return JSON: {"required_skills": [skills the posting requires, as short names of 1-3 words such as '
+        '"Python", "Docker", "RAG", "LangChain"], '
+        '"nice_to_have_skills": [skills marked preferred/bonus/nice to have, same format], '
         '"min_years": number or null, "level": "intern|junior|mid|senior|unknown", '
         '"work_mode": "remote|hybrid|onsite|unknown"}'
     )

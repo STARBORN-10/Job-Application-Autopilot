@@ -38,8 +38,11 @@ def run():
              description="Python Developer ... snippet", quality="snippet")
     jb = job("Python Developer - 4-5 Years", "BLUMETRA SOLUTIONS PRIVATE LIMITED", "Hyderabad", "jooble",
              url="https://in.jooble.org/jdp/111", description="<b>Python</b> snippet", quality="snippet")
-    unique, merged = dedupe.dedupe_jobs([az, jb, js])
+    records = []
+    unique, merged = dedupe.dedupe_jobs([az, jb, js], records)
     check(len(unique) == 1 and merged == 2, "Three listings of one job collapse into one")
+    check([r["reason"] for r in records] == ["title+company+location"] * 2 and "[jooble]" in records[0]["merged"],
+          "Each merge is recorded with its reason (shown in the run summary)")
     m = unique[0]
     check(set(m.source_names) == {"jsearch", "adzuna", "jooble"}, "Every source is recorded in source_names")
     check(m.description == full_desc and m.description_quality == "full", "The richest (full) description is kept")
@@ -89,6 +92,8 @@ def run():
     check(geo.location_match("Bangalore", ["Bengaluru", "Remote"]) == "match", "City aliases (Bangalore = Bengaluru)")
     check(geo.location_match("Gurgaon, Haryana", ["Hybrid", "India"]) == "match", "Gurgaon matches India")
     check(geo.location_match("Anywhere", []) == "match", "No preferences means everything matches")
+    check(geo.location_match("Remote - Nordics", prefs) == "mismatch" and geo.location_match("Remote, EMEA", prefs) == "mismatch",
+          "Region-restricted remote postings (Nordics, EMEA) do not match India")
 
     check.done("DE-DUPLICATION")
 

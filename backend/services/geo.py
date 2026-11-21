@@ -40,6 +40,9 @@ FOREIGN_MARKERS = {
     "san francisco", "seattle", "california", "texas", "poland", "brazil", "mexico", "israel",
     "switzerland", "zurich", "sweden", "philippines", "indonesia", "vietnam", "malaysia",
     "south korea", "seoul", "hong kong", "china", "taiwan", "argentina", "colombia", "chile",
+    # regions used by remote postings
+    "nordics", "emea", "europe", "eu", "latam", "americas", "north america", "dach", "benelux", "anz",
+    "mena", "uk&i", "us only", "canada only",
 }
 
 REMOTE_WORDS = ("remote", "work from home", "wfh", "anywhere")

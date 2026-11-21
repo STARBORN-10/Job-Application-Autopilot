@@ -58,6 +58,9 @@ def run():
     found = extract_skills("We need Python, Django and REST APIs on AWS; K8s a plus. Go-getter attitude.")
     check({"python", "django", "rest api", "aws", "kubernetes"} <= set(found) and "go" not in found,
           f"Keyword extraction finds skills, ignores ambiguous words ({found})")
+    check(match_skills(["RAG architectures", "LLM-based applications", "AI/ML", "go-to-market"], ["rag", "llm", "ml", "go"])
+          == (["rag architectures", "llm-based applications", "ai/ml"], ["go-to-market"]),
+          "Verbose AI-extracted skills match the specific skill they name (no 'go' in go-to-market)")
     check(skill_in_text("Machine Learning", "strong ML background") and not skill_in_text("Figma", "HTML/CSS only"),
           "skill_in_text checks aliases and rejects absent skills")
 
@@ -69,6 +72,10 @@ def run():
     check(matching.is_relevant("Software Engineer, Backend", "Python Developer", "We use Python and Django"),
           "Generic engineering title relevant when the description has the core skill")
     check(not matching.is_relevant("Accounts Payable Manager", "Python Developer", "Excel"), "Unrelated title not relevant")
+    check(not matching.is_relevant("Lakebase Sales Specialist, Nordics", "AI/ML Engineer", "We build AI products"),
+          "Non-engineering titles are not relevant just because the description mentions AI")
+    check(matching.is_relevant("Software Engineer, New Grad", "AI/ML Engineer", "Work on ML infrastructure"),
+          "Engineering title with the role's core skill in the description is relevant")
 
     check.section("3. Hard filters")
     s = SETTINGS.model_copy(update={"blocked_companies": "Bad Corp", "blocked_keywords": "night shift",
@@ -190,6 +197,13 @@ def run():
                        w.DEFAULT_WEIGHTS, now=NOW)
     check(cr.score == 4.0 and cr.breakdown["cap"]["uncapped"] > 4.0, "Off-role title + no skill match -> capped at 4.0")
     check("Capped at 4" in cr.match_reason, "Cap is explained")
+    mech = eng.score_job(job(title="Mechanical Engineer", description_quality="snippet"),
+                         JobFacts(required_skills=["python"], source="heuristic"), profile, SETTINGS,
+                         w.DEFAULT_WEIGHTS, now=NOW)
+    check(mech.score == 6.5 and "title does not fit" in mech.breakdown["cap"]["reason"],
+          "Off-role title with matching skills -> capped at 6.5 (below the default minimum)")
+    check(matching.role_similarity("Mechanical Engineer", "Software Engineer") < 0.35,
+          "Sharing the word 'engineer' does not make titles similar")
     remote = eng.score_job(job(location="Remote"), facts, profile, SETTINGS, w.DEFAULT_WEIGHTS, now=NOW)
     check(remote.breakdown["parts"]["preferences"]["location"] == "match", "Remote job matches a Remote preference")
     typed = SETTINGS.model_copy(update={"preferred_job_types": "Internship"})

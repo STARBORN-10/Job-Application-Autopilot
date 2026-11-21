@@ -3,7 +3,7 @@ import os
 
 from schemas import JobCreate
 from services.sources.base import FetchContext, JobSource, SourceError, SourceQuery, http_post
-from services.sources.common import experience_from_text, normalize_job_type, parse_datetime, strip_html
+from services.sources.common import clean_company, experience_from_text, normalize_job_type, parse_datetime, strip_html
 
 API_URL = "https://in.jooble.org/api/{key}"
 
@@ -35,7 +35,7 @@ class JoobleSource(JobSource):
         snippet = strip_html(item.get("snippet")).strip(" .…")
         return JobCreate(
             title=title,
-            company=strip_html(item.get("company")) or "",
+            company=clean_company(item.get("company")),
             url=item.get("link"),
             location=strip_html(item.get("location")),
             description=snippet,

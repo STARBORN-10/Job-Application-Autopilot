@@ -3,7 +3,7 @@ import os
 
 from schemas import JobCreate
 from services.sources.base import FetchContext, JobSource, SourceError, SourceQuery, http_get
-from services.sources.common import experience_from_text, normalize_job_type, parse_datetime, strip_html
+from services.sources.common import clean_company, experience_from_text, normalize_job_type, parse_datetime, strip_html
 
 API_URL = "https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
 
@@ -41,7 +41,7 @@ class AdzunaSource(JobSource):
         title = strip_html(item.get("title"))
         if not title:
             return None
-        company = strip_html((item.get("company") or {}).get("display_name")) or ""
+        company = clean_company((item.get("company") or {}).get("display_name"))
         location = (item.get("location") or {}).get("display_name") or ""
         description = strip_html(item.get("description"))
         job_type = normalize_job_type(item.get("contract_time")) or normalize_job_type(item.get("contract_type"))

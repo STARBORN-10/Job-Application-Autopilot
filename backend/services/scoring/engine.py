@@ -10,8 +10,10 @@ Each part is a value between 0 and 1; the score is the weighted sum (weights add
 - preferences: location fit and preferred job type.
 - freshness: 1.0 when posted in the last 3 days, falling to 0 at the maximum job age.
 
-Relevance cap: if the title fit is below 0.35 and under a third of the stated skills match (or none
-are stated), the score is capped at 4.0 and the breakdown says so.
+Relevance caps: the eligibility parts (experience, preferences, freshness) are full for most fresher
+jobs, so an off-role posting could otherwise score well. If the title fit is below 0.35 the score is
+capped at 6.5 (below the default minimum of 7), or at 4.0 when under a third of the stated skills match
+too. The breakdown records the cap and the uncapped score.
 """
 import datetime
 from dataclasses import dataclass
@@ -29,6 +31,7 @@ NEUTRAL = 0.5
 RELEVANCE_ROLE_MIN = 0.35
 RELEVANCE_SKILLS_MIN = 0.34
 RELEVANCE_CAP = 4.0
+TITLE_CAP = 6.5
 CONFIDENCE = {("llm", "full"): 1.0, ("llm", "snippet"): 0.6, ("heuristic", "full"): 0.7, ("heuristic", "snippet"): 0.45}
 
 
@@ -74,6 +77,8 @@ def _experience_part(facts: JobFacts, profile: CandidateProfile, max_years: int)
         gap = facts.min_years - tolerance
         value = 1.0 if gap <= 0 else max(0.0, 1.0 - gap / 3.0)
         detail = f"asks {facts.min_years:g}y, you have {candidate:g}y"
+        if candidate < facts.min_years <= tolerance:
+            detail += f" (within your {max_years}y limit)"
     else:
         by_level = {"intern": 1.0, "junior": 1.0, "mid": 0.55, "senior": 0.15, "unknown": 0.7}
         if candidate >= 3:
@@ -144,10 +149,12 @@ def score_job(job, facts: JobFacts, profile: CandidateProfile, settings, weights
     # jobs, so an off-role posting could otherwise score well. When neither the title nor the skills fit,
     # the score is capped.
     cap = None
-    if values["role"] < RELEVANCE_ROLE_MIN and skill["raw"] < RELEVANCE_SKILLS_MIN and total > RELEVANCE_CAP:
-        cap = {"limit": RELEVANCE_CAP, "uncapped": round(total, 1),
-               "reason": "title and skills do not fit your role"}
-        total = RELEVANCE_CAP
+    if values["role"] < RELEVANCE_ROLE_MIN:
+        limit, reason = ((RELEVANCE_CAP, "title and skills do not fit your role") if skill["raw"] < RELEVANCE_SKILLS_MIN
+                         else (TITLE_CAP, "job title does not fit your target roles"))
+        if total > limit:
+            cap = {"limit": limit, "uncapped": round(total, 1), "reason": reason}
+            total = limit
     score = round(total, 1)  # points are weight x value / 10, so they already add up to 0-10
     breakdown = {
         "version": 2,

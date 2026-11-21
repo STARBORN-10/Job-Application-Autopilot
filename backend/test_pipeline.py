@@ -283,7 +283,7 @@ def run_all_pipeline_tests():
     # 8. Test: Database commit failure – Telegram must NOT be called
     # -----------------------------------------------------------------------
     print("\n--- 8. Testing DB commit failure (Telegram should NOT be called)---")
-    fail_db = make_job("Failing DB Job", "DBError Corp", "https://example.com/job/db-fail")
+    fail_db = make_job("ML Engineer (DB Fail)", "DBError Corp", "https://example.com/job/db-fail")
     with patch("services.jsearch_service.fetch_jobs", return_value=[fail_db]), \
          patch("crud.create_job", side_effect=Exception("DB commit error")) as mock_create, \
          patch("services.notification_service.send_job_alert") as mock_notify:
@@ -296,9 +296,9 @@ def run_all_pipeline_tests():
     # 9. Test: Telegram notification failure – job persists, not counted as notified
     # -----------------------------------------------------------------------
     print("\n--- 9. Testing Telegram failure (job should persist, notified count unchanged)---")
-    notify_fail = make_job("Notify Fail Job", "NotifyError Inc", "https://example.com/job/notify-fail",
+    notify_fail = make_job("ML Engineer (Notify Fail)", "NotifyError Inc", "https://example.com/job/notify-fail",
                            description="Machine learning and Python.")
-    FACTS["Notify Fail Job"] = {"required_skills": ["Python", "machine learning"]}
+    FACTS["ML Engineer (Notify Fail)"] = {"required_skills": ["Python", "machine learning"]}
     with patch("services.jsearch_service.fetch_jobs", return_value=[notify_fail]), \
          patch("services.notification_service.send_job_alert", side_effect=Exception("Telegram error")) as mock_notify:
         summary = pipeline.run_automation_pipeline(db_session=db)
@@ -376,9 +376,9 @@ def run_all_pipeline_tests():
             pass
     assert_test(auth_calls["n"] == 1 and mock_sleep.call_count == 0, "Non-transient (auth) error is NOT retried")
 
-    outage = make_job("Retry Eng", "Flaky Corp", "https://example.com/job/retry-1",
+    outage = make_job("ML Engineer (AI Outage)", "Flaky Corp", "https://example.com/job/retry-1",
                       description="Machine learning engineer: Python, PyTorch, SQL, NLP.")
-    AI_DOWN_TITLES.add("Retry Eng")
+    AI_DOWN_TITLES.add("ML Engineer (AI Outage)")
     with patch("services.jsearch_service.fetch_jobs", return_value=[outage]), \
          patch("services.notification_service.send_job_alert"):
         AI_CALLS.clear()

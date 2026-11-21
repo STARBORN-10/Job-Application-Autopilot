@@ -111,17 +111,19 @@ def compatible_locations(a: Optional[str], b: Optional[str]) -> bool:
     return bool(ca & cb)
 
 
-def is_same_job(a, b) -> bool:
-    """`a` and `b` are JobCreate-like objects (title, company, location, url / canonical_url)."""
+def duplicate_reason(a, b) -> Optional[str]:
+    """Why `a` and `b` (JobCreate-like) are the same posting: "url", "title+company+location", or None."""
     ua = getattr(a, "canonical_url", None) or canonical_url(getattr(a, "url", None))
     ub = getattr(b, "canonical_url", None) or canonical_url(getattr(b, "url", None))
     if ua and ub and ua == ub:
-        return True
-    return (
-        same_company(a.company, b.company)
-        and same_title(a.title, b.title)
-        and compatible_locations(a.location, b.location)
-    )
+        return "url"
+    if same_company(a.company, b.company) and same_title(a.title, b.title) and compatible_locations(a.location, b.location):
+        return "title+company+location"
+    return None
+
+
+def is_same_job(a, b) -> bool:
+    return duplicate_reason(a, b) is not None
 
 
 def _richness(job) -> tuple[int, int]:
@@ -150,10 +152,11 @@ def merge_into(primary, other) -> None:
         primary.company = other.company
 
 
-def dedupe_jobs(jobs: Iterable) -> tuple[list, int]:
+def dedupe_jobs(jobs: Iterable, merges: Optional[list] = None) -> tuple[list, int]:
     """
     Merge duplicates within one batch. Returns (unique jobs, number of jobs merged away).
-    Order is preserved (first occurrence wins as the representative).
+    Order is preserved (first occurrence wins as the representative). If `merges` is a list, one
+    record per merge is appended to it (for the run summary).
     """
     unique: list = []
     merged = 0
@@ -162,10 +165,19 @@ def dedupe_jobs(jobs: Iterable) -> tuple[list, int]:
             job.canonical_url = canonical_url(job.url)
         if not job.source_names and job.source:
             job.source_names = [job.source]
-        match = next((u for u in unique if is_same_job(u, job)), None)
+        match, reason = None, None
+        for u in unique:
+            reason = duplicate_reason(u, job)
+            if reason:
+                match = u
+                break
         if match is None:
             unique.append(job)
-        else:
-            merge_into(match, job)
-            merged += 1
+            continue
+        if merges is not None:
+            merges.append({"kept": f"{match.title} | {match.company} | {match.location} [{match.source}]",
+                           "merged": f"{job.title} | {job.company} | {job.location} [{job.source}]",
+                           "reason": reason})
+        merge_into(match, job)
+        merged += 1
     return unique, merged

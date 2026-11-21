@@ -81,5 +81,10 @@ def normalize_job_type(value: Optional[str]) -> Optional[str]:
     return str(value).strip() or None
 
 
-def truncate(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+_JUNK_COMPANY = re.compile(r"checking your browser|just a moment|captcha|access denied|attention required", re.I)
+
+
+def clean_company(name: Optional[str]) -> str:
+    """Company name, or "" when a source returned a bot-check page title instead (seen on Adzuna)."""
+    name = strip_html(name)
+    return "" if not name or _JUNK_COMPANY.search(name) else name

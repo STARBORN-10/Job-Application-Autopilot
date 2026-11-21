@@ -177,13 +177,37 @@ def skill_in_text(skill: str, text: str) -> bool:
     return bool(words) and all(_alias_pattern(w).search(t) for w in words)
 
 
+_GENERIC_CONCEPTS = {"artificial intelligence", "automation", "testing", "communication", "rest api"}
+_CONCEPT_EXCLUDE = _SCAN_EXCLUDE - {"ml", "dl"}  # e.g. "go-to-market" must not mean the Go language
+
+
+def concepts(skill: str) -> set[str]:
+    """
+    Known canonical skills named inside a (possibly verbose) skill phrase:
+    "RAG architectures" -> {"rag"}, "LLM-based applications" -> {"llm"}, "AI/ML" -> {"machine learning", ...}.
+    Very broad concepts only count when they are the whole phrase.
+    """
+    whole = normalize_skill(skill)
+    found = {whole} if whole in SKILL_ALIASES else set()
+    words = re.findall(r"[a-z0-9+#.]+", _clean(skill).replace("/", " ").replace("-", " "))
+    for size in (3, 2, 1):
+        for i in range(len(words) - size + 1):
+            phrase = " ".join(words[i:i + size])
+            for candidate in (phrase, phrase.rstrip("s")):
+                canonical = _ALIAS_TO_CANONICAL.get(candidate)
+                if canonical and canonical not in _GENERIC_CONCEPTS and candidate not in _CONCEPT_EXCLUDE:
+                    found.add(canonical)
+    return found
+
+
 def skills_match(a: str, b: str) -> bool:
     na, nb = normalize_skill(a), normalize_skill(b)
     if na == nb:
         return True
     if len(na) > 3 and len(nb) > 3 and difflib.SequenceMatcher(None, na, nb).ratio() >= FUZZY_THRESHOLD:
         return True
-    return False
+    # A verbose requirement ("RAG architectures") is met by the specific skill it names ("RAG").
+    return bool(concepts(a) & ({nb} | concepts(b)))
 
 
 def match_skills(required: Iterable[str], candidate: Iterable[str]) -> tuple[list[str], list[str]]:

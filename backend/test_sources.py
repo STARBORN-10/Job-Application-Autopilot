@@ -73,6 +73,9 @@ def run():
     hyd = next(j for j in res.jobs if j.company == "Blumetra")
     check(hyd.experience == "4–5 Years" and hyd.job_type == "Full-time", "Experience and job type extracted")
     check(hyd.posted_date is not None, "Posted date parsed")
+    from services.sources.common import clean_company
+    check(clean_company("Checking your browser before redirecting") == "" and clean_company("<b>Acme</b>") == "Acme",
+          "Bot-check page titles are not used as company names")
 
     # ------------------------------------------------------------------
     check.section("2. Jooble")

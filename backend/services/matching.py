@@ -92,8 +92,13 @@ def role_similarity(title: Optional[str], role: Optional[str]) -> float:
         core = 0.5
     generic = 1.0 if (role_generic and title_generic) or not role_generic else 0.0
     token_score = 0.8 * core + 0.2 * generic if groups else 0.5 * generic
-    ratio = difflib.SequenceMatcher(None, " ".join(sorted(tokens(role))), " ".join(sorted(title_tokens))).ratio()
-    return round(max(token_score, ratio * 0.9), 3)
+    # Spelling-level similarity of the specific words only (shared nouns like "engineer" must not count:
+    # "Mechanical Engineer" is not close to "Software Engineer").
+    role_core = sorted(tokens(role) - _GENERIC_STEMS)
+    title_core = sorted(title_tokens - _GENERIC_STEMS)
+    ratio = difflib.SequenceMatcher(None, " ".join(role_core), " ".join(title_core)).ratio() if role_core and title_core else 0.0
+    spelling = ratio * 0.9 if ratio >= 0.75 else 0.0   # only near-identical spellings count
+    return round(max(token_score, spelling), 3)
 
 
 def best_role_similarity(title: Optional[str], roles: Iterable[str]) -> tuple[float, Optional[str]]:
@@ -105,14 +110,27 @@ def best_role_similarity(title: Optional[str], roles: Iterable[str]) -> tuple[fl
     return best, best_role
 
 
+ENGINEERING_NOUNS = {_stem(w) for w in ("engineer", "developer", "programmer", "scientist", "analyst")}
+NON_TECH_WORDS = {
+    "sales", "recruiter", "recruiting", "recruitment", "legal", "counsel", "marketing", "accountant", "accounts",
+    "accounting", "finance", "payable", "collections", "collection", "talent", "rewards", "customer", "support",
+    "manager", "director", "head", "operations", "partner", "executive", "representative", "designer", "content",
+    "audit", "compliance", "procurement", "lending", "program", "management",
+}
+
+
 def is_relevant(title: Optional[str], role: str, description: Optional[str] = None, threshold: float = 0.5) -> bool:
     """Cheap relevance test for unfiltered listings (ATS boards, scraped pages)."""
+    words = set(re.findall(r"[a-z]+", (title or "").lower()))
+    if words & NON_TECH_WORDS:
+        return False
     if role_similarity(title, role) >= threshold:
         return True
     groups, _ = role_groups(role)
     if not groups or not description:
         return False
     # e.g. role "Python Developer" and title "Software Engineer, Backend" whose description asks for Python.
+    # Only engineering titles qualify: words like "AI" appear in almost every modern description.
     title_tokens = tokens(title)
     desc_tokens = tokens(description)
-    return bool(title_tokens & _GENERIC_STEMS) and all(g & desc_tokens for g in groups)
+    return bool(title_tokens & ENGINEERING_NOUNS) and all(g & desc_tokens for g in groups)

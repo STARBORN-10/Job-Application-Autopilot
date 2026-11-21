@@ -42,6 +42,7 @@ _TELEGRAM_TRANSIENT = (notification_service.TelegramNetworkError, notification_s
 
 STATUS_SETTINGS_KEY = "pipeline_status"
 MAX_DETAILS = 300
+MAX_MERGE_RECORDS = 60
 
 # Global execution lock to prevent overlapping runs
 _pipeline_lock = threading.Lock()
@@ -125,6 +126,7 @@ def _new_summary() -> Dict[str, Any]:
         "total_fetched": 0,
         "unique_jobs": 0,
         "merged_duplicates": 0,
+        "merges": [],              # which listings were merged and why (first MAX_MERGE_RECORDS)
         "duplicates_skipped": 0,
         "experience_filtered": 0,
         "filtered": {},            # other hard filters: {"location": n, "job_type": n, ...}
@@ -187,7 +189,9 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
         logger.error(summary["message"])
         return
 
-    jobs, merged = dedupe.dedupe_jobs(fetched.jobs)
+    merges: list = []
+    jobs, merged = dedupe.dedupe_jobs(fetched.jobs, merges)
+    summary["merges"] = merges[:MAX_MERGE_RECORDS]
     summary["total_fetched"] = len(fetched.jobs)
     summary["unique_jobs"] = len(jobs)
     summary["merged_duplicates"] = merged
