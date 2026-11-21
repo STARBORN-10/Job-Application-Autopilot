@@ -1,6 +1,6 @@
 # Job Application Autopilot: Project Brief (Version 1 to Version 2)
 
-A short, plain-language brief for building the project report and presentation. Each numbered section can become one or two slides. Anything marked **[Planned]** is not built yet; everything else has been built and tested.
+A short, plain-language brief for building the project report and presentation. Each numbered section can become one or two slides. Anything marked **[Deferred]** is not built yet; everything else has been built and tested (Version 2 was built in November 2026, see sections 6, 7 and 11).
 
 ---
 
@@ -83,74 +83,78 @@ The project started on the no-code tool Make.com and was moved into our own Pyth
 - **Single user**, with no login.
 - **Free hosting** can sleep or lose its database, which makes the deployed site unreliable.
 
-## 6. Version 2: what changes **[Planned]**
+## 6. Version 2: what was built
 
-Three upgrades, chosen by the project owner:
+Three upgrades, chosen by the project owner, built in five phases (V2.0 to V2.4).
 
-### 6.1 More job sources (built first)
-Instead of one provider, the system will search many, each as a separate plug-in that can fail without stopping the rest.
+### 6.1 More job sources (V2.0)
+Each source is a separate plug-in that can fail without stopping the rest. Every run records each
+source's result (jobs found, errors) and the dashboard shows its health. JSearch has a monthly budget
+(150 of the 200 free requests) counted in the database.
 
-| Source | What it adds |
+| Source | Status |
 |---|---|
-| JSearch (existing) | Google Jobs, includes some Internshala, LinkedIn and Shine listings |
-| Adzuna and Jooble | India-focused job APIs (to be tested) |
-| Company career boards (Greenhouse, Lever, Ashby) | Jobs straight from companies, for example Groww and Databricks have India openings |
-| Indeed and LinkedIn (scraper library) | Tested: relevant results with descriptions; may be blocked on servers |
-| Internshala | Internships; public listing pages can be read |
-| Naukri | Tested and **not usable** with the available tool; needs another approach or is skipped |
+| JSearch (existing) | Built. Google Jobs; full descriptions |
+| Adzuna India, Jooble India | Built and tested live. Short description snippets |
+| Company career boards (Greenhouse, Lever, Ashby) | Built and tested live. Default list: Groww, Databricks, Stripe, CRED, Meesho, Paytm, Zeta, Notion, OpenAI (editable). Filtered to India/remote and to the active role |
+| Internshala | Built as an experimental scraper (off by default): public listing pages only, 2 requests per run, 1 per second. Tested live |
+| Indeed and LinkedIn (python-jobspy) | Built as an optional, experimental source (off by default, library not installed by default). Tested offline only |
+| Naukri, Google Jobs | Not used: tested and not usable with the available tool |
 
-Also added: merging duplicates that appear on several sites, and a **switchable AI layer** (Gemini first, then Groq, then OpenRouter free models) so one provider's quota cut cannot stop the system.
+Also built: **merging duplicates** across sites (same link, or same company + near-identical title +
+compatible city), and a **switchable AI layer** (Gemini, then Groq, then OpenRouter) that moves on to
+the next provider when one is rate limited, down or returns bad output. This happened in a live run:
+Gemini answered "high demand" (503) and Groq took over automatically.
 
-### 6.2 A smarter, explainable score
-Today the AI gives one number. In Version 2:
+Database **migrations** (Alembic) were added first, so existing databases upgrade without data loss.
 
-1. The resume is turned into a structured profile (skills, years, projects, preferred roles).
-2. **Hard filters** run first: location, experience, job type.
-3. The AI only *extracts facts* from the job (required skills, level).
-4. **The score is computed by rules** from five parts: skills covered, role fit, experience level, preferences, and freshness.
-5. The screen shows the breakdown (for example "skills 8/10, level 6/10") so the result can be trusted and checked.
-6. Every Approve or Skip you tap becomes feedback, and the weights are tuned to your taste over time.
+### 6.2 A smarter, explainable score (V2.1)
+1. The resume is turned once into a structured profile (skills, years, education, roles), cached until the resume changes.
+2. **Hard filters** run first: experience, location, job type, blocked companies and keywords.
+3. A cheap keyword score ranks all jobs; only the top 15 per run use AI to *extract facts* (required skills, years, level, work mode). Facts not found in the posting text are thrown away.
+4. **The score is computed by code** from five parts: skills 40%, role fit 20%, experience 15%, preferences 15%, freshness 10% (editable).
+5. The job page shows the breakdown as bars, with matched and missing skills, and says when only a short snippet was available.
+6. Titles that do not fit the target role are capped (6.5), so they stay under the default minimum of 7.
 
-### 6.3 Approve in Telegram, then apply
-Each alert gets buttons: **Approve, Skip, Show cover letter**. Only after you tap **Approve** does the system apply, and only in safe ways:
+### 6.3 Approve in Telegram, then apply (V2.2, V2.3)
+Each alert has buttons: **Approve, Skip, Cover letter**. The same buttons are on the website. Only the
+owner's Telegram chat is obeyed. After **Approve**:
 
-| Job type | What happens after Approve |
+| Job type | What happens |
 |---|---|
-| Posting lists an email address (common in India) | Resume and cover letter are emailed from your Gmail, with a daily cap |
-| Company career page (Greenhouse, Lever, Ashby) | The form is filled automatically |
-| Naukri, Internshala, LinkedIn | The job opens with your cover letter ready; you press Submit |
+| Posting lists a recruiter e-mail | Cover letter + resume PDF e-mailed by SMTP (e.g. Gmail app password), with a daily cap. **Dry-run by default**: logged, not sent |
+| Everything else, including Greenhouse / Lever / Ashby career pages | "Assisted": the link and cover letter are sent to Telegram and shown on the Applications page with a copy button; you submit |
 
-Logging in as the user on Naukri, LinkedIn or Internshala to apply automatically is **deliberately excluded**. Those sites forbid it and the account could be banned.
+Every attempt is logged with what was (or would have been) sent. Logging in as the user on Naukri,
+LinkedIn or Internshala is **deliberately excluded**. **[Deferred]** automatic career-page form filling.
 
-Every application is logged with exactly what was sent.
+### 6.4 Learning and protection (V2.4 and supporting work)
+- After 30 or more Approve/Skip decisions the system suggests new score weights from what you approved
+  (each weight moves at most 5 points per step, stays between 5 and 60, total 100). Applied only on request.
+- An optional admin key protects approve, skip, apply, webhook setup and tuning; the "Find New Jobs"
+  button has a 2-minute cooldown.
+- **[Deferred]** Gmail tracking of interview/rejection e-mails, a tailored resume per job, follow-up
+  reminders (they need Gmail sign-in, which is out of scope for this pass).
 
-### 6.4 Supporting upgrades **[Planned]**
-- A permanent online database with safe schema updates (migrations)
-- A login or key on actions that spend money or send applications
-- Gmail tracking that updates statuses when interview or rejection emails arrive
-- A tailored resume per job (reordering real experience, never inventing)
-- Follow-up reminders
+## 7. Version 1 vs Version 2
 
-## 7. What Version 2 will be able to do
+A normal day with Version 2:
 
-A normal day once Version 2 is finished:
-
-1. The system searches **many sources** by itself every few hours.
-2. It removes duplicates and jobs that do not fit your hard requirements.
+1. The system searches **several sources** (button, built-in scheduler, or an external cron).
+2. It merges duplicates and drops jobs that fail your hard requirements.
 3. It scores each remaining job with a **visible breakdown**.
-4. Telegram sends the good ones with **Approve / Skip** buttons.
-5. You tap **Approve** on the ones you like.
-6. The system applies by email or career-page form, or opens the job with the letter ready.
-7. The dashboard shows your funnel, and Gmail updates statuses when companies reply.
+4. Telegram sends the good ones with **Approve / Skip / Cover letter** buttons.
+5. You tap **Approve**; the system e-mails the recruiter (once you turn dry-run off) or prepares an assisted apply.
+6. The dashboard shows the applications log, your funnel and each source's health.
 
-| Measure | Version 1 | Version 2 (target) |
+| Measure | Version 1 | Version 2 (built) |
 |---|---|---|
-| Job sources | 1 | 4 or more working at once |
-| Score | One AI number, no explanation | Rule-based score with breakdown |
-| Applying | Manual | One tap after approval, safe methods only |
-| Learns from you | No | Yes, from Approve and Skip |
-| If one AI provider fails | Pipeline stops | Falls back to another |
-| Users | One | Designed for several |
+| Job sources | 1 | 4 working in live runs (JSearch, Adzuna, Jooble, career boards) + Internshala (experimental) |
+| Score | One AI number, no explanation | Code-computed score with a five-part breakdown |
+| Applying | Manual | After approval: e-mail (dry-run by default) or assisted |
+| Learns from you | No | Weight suggestions from Approve and Skip |
+| If one AI provider fails | Pipeline stops | Falls back to another (seen live) |
+| Users | One | Still one (multi-user not built) |
 
 ## 8. Safety and responsibility
 
@@ -172,20 +176,28 @@ A normal day once Version 2 is finished:
 
 ## 10. Roadmap
 
-| Phase | Goal |
-|---|---|
-| **Done (V1)** | Search, AI scoring, cover letters, Telegram alerts, website, analytics |
-| **V2.0** | Migrations and online database, source plug-ins, new sources, switchable AI |
-| **V2.1** | Explainable scoring |
-| **V2.2** | Telegram Approve and Skip buttons |
-| **V2.3** | Safe apply methods and the application log |
-| **V2.4** | Learning from decisions, Gmail tracking, tailored resumes |
+| Phase | Goal | Status |
+|---|---|---|
+| **V1** | Search, AI scoring, cover letters, Telegram alerts, website, analytics | Done |
+| **V2.0** | Migrations, source plug-ins, new sources, de-duplication, switchable AI, trigger protection | Done |
+| **V2.1** | Explainable scoring | Done |
+| **V2.2** | Telegram Approve and Skip buttons | Done (needs `TELEGRAM_CHAT_ID` and a webhook or polling to use) |
+| **V2.3** | Safe apply methods and the application log | Done (e-mail + assisted). Career-page form filling deferred |
+| **V2.4** | Learning from decisions | Done. Gmail tracking and tailored resumes deferred |
 
 ## 11. Current status (for the report)
 
-- Version 1 works end to end on a local machine.
-- The deployed website was reachable, but its online server was not answering when last checked. A fix that keeps the server running when its database is unavailable has been submitted for review.
-- Version 2 is at the planning and research stage. Several sources were tested; Adzuna, Jooble and the free AI providers still need free keys to be tested.
+- Version 2 is built and tested: **592 automated checks pass across 15 offline test suites** (HTTP,
+  Telegram and e-mail are mocked).
+- Live test (local, real keys, a copy of the real database): one run fetched **258 jobs** from five sources
+  (JSearch 10, Adzuna 50, Jooble 20, career boards 77, Internshala 102), merged **75 duplicate listings**
+  (most were one job re-posted within a source; at least 6 were the same job on Adzuna and Jooble), dropped 64 jobs needing too much experience, extracted AI facts for
+  the top 8 jobs, wrote 6 cover letters and saved the qualifying jobs with score breakdowns. Telegram and
+  e-mail stayed off.
+- The live runs exposed a scoring weakness (off-role titles such as "Mechanical Engineer" scored above 7);
+  it was fixed and re-checked against the same real jobs.
+- To use Telegram buttons the owner still needs to set `TELEGRAM_CHAT_ID` (and a webhook secret).
+- The deployed Render server still needs to be checked and redeployed with the new settings.
 
 ## 12. Suggested slide outline
 
@@ -205,4 +217,4 @@ A normal day once Version 2 is finished:
 14. Risks and roadmap
 15. Conclusion and next steps
 
-**Screenshots to capture before presenting:** the dashboard after a run, a job page showing the cover letter and the "Analyze Fit" result, the analytics page, and a Telegram alert.
+**Screenshots to capture before presenting:** the dashboard after a run, a job page showing the score breakdown and cover letter, the Settings page with source health, the Applications page, the analytics page, and a Telegram alert with buttons.

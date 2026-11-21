@@ -1,6 +1,6 @@
 # Job Application Autopilot: Version 2 Plan
 
-Status: **planning only.** No V2 code exists yet. This document records the decisions, the evidence behind them, and the build order.
+Status: **V2.0 to V2.4 built** (November 2026) on branch `feature/v2-sources-scoring-approval`. Section 9 records what was built, what was verified live, and what is deferred. Sections 1 to 8 are the original plan and research.
 
 ## 1. Where V1 stands
 
@@ -43,8 +43,8 @@ Tested from a home connection with throwaway scripts. A cloud IP is likely to be
 | **Ashby boards** | Works. OpenAI 12 India mentions | Good |
 | **Remotive, Arbeitnow, Himalayas** | All respond | Remote and Europe oriented. Low value for India. Optional |
 | **JSearch** (current) | Works with `/search-v2` | Keep, but 200 requests per month means it is one source of several |
-| **Adzuna India, Jooble India** | **Not tested.** Need free keys | Test next |
-| **Groq, OpenRouter (AI providers)** | **Not tested.** Need free keys | Test next |
+| **Adzuna India, Jooble India** | Tested live: Adzuna 50 results per request (snippets, some empty or bot-check company names), Jooble 20 (snippets) | Built as sources |
+| **Groq, OpenRouter (AI providers)** | Groq tested live (JSON mode, gpt-oss models, ~8000 tokens/min). OpenRouter not tested (no key) | Groq built as fallback; OpenRouter built, untested live |
 
 Not yet verified: Adzuna and Jooble India coverage, the Groq and OpenRouter free limits, and everything from a cloud IP address.
 
@@ -113,3 +113,30 @@ Free keys, placed in `backend/.env` (never in chat or in git):
 - `TELEGRAM_CHAT_ID`
 
 Decisions: which hosting provider for the always-on server, and the list of Indian companies whose career boards should be watched.
+
+## 9. Progress (V2 build)
+
+| Phase | Built | Verified |
+|---|---|---|
+| V2.0 Foundation | Alembic (idempotent V1 baseline + V2 schema, run on startup in the DB retry loop); source plug-ins with registry, runner, per-source health, per-run caps and JSearch monthly budget (`api_usage`); JSearch, Adzuna, Jooble, ATS boards, Internshala (off), JobSpy (off, optional); cross-source de-dup; LLM layer (Gemini, Groq, OpenRouter); trigger cooldown; optional admin key; persisted run summary; `/api/sources`, ATS company list | Offline suites; migration of a copy of the real V1 database (rows kept); live runs |
+| V2.1 Scoring | Cached candidate profile, hard filters, keyword pre-score, AI facts for the top N verified against the text, weighted score in code with breakdown and relevance caps, editable weights, UI breakdown | Offline suites with hand-computed scores; live runs; re-score of real jobs after a calibration fix |
+| V2.2 Telegram | Approve / Skip / Cover letter buttons, webhook with secret header, chat-id check, polling mode, set-webhook, dashboard buttons, decision log | Offline only (all Telegram HTTP mocked; `TELEGRAM_CHAT_ID` not set) |
+| V2.3 Apply | E-mail apply (SMTP, dry-run default, daily cap, duplicate guard), assisted apply, application log and page | Offline only (smtplib mocked); never sent anything |
+| V2.4 Learning | Weight tuning from 30+ decisions (logistic regression, 5-point steps, 5-60 bounds, sum 100), suggestion UI | Offline with synthetic decisions |
+
+**Live results (local machine, copy of the real database, real keys, Telegram and e-mail off):**
+- Run with five sources: JSearch 10, Adzuna 50, Jooble 20 (1 too old), career boards 77 (9 requests), Internshala 102 (2 requests); 258 fetched, 75 merged, 183 unique.
+- Gemini returned 503 "high demand" once; Groq took over automatically.
+- The first runs exposed two problems, both fixed: career boards kept non-engineering roles, and off-role titles ("Mechanical Engineer") could score above 7.
+- JSearch used 2 of its 200 monthly requests in total during testing.
+
+**Deferred (not built):**
+- Career-page form filling (Greenhouse / Lever / Ashby with Playwright): these URLs are detected and routed to assisted apply.
+- Gmail tracking of replies, tailored resume per job, follow-up reminders (need Gmail OAuth).
+- Naukri and Google Jobs sources (not usable, see section 3).
+- Multi-user support and login.
+- Testing the scraped sources from a cloud IP, and the Render deployment itself (section 7).
+
+**Calibration note:** for fresher roles the experience, preference and freshness parts are usually full,
+so scores of relevant jobs still cluster around 7 to 9. Raise the minimum score or tune the weights once
+there are 30+ decisions.

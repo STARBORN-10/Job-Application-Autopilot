@@ -4,27 +4,28 @@
 
 An AI-powered full-stack application that automates job discovery, evaluates opportunities based on a candidate's profile, generates personalized cover letters, and organizes relevant jobs in a centralized dashboard.
 
-The whole workflow runs **natively in the Python backend** (FastAPI + Google Gemini + JSearch + Telegram), with a React dashboard on top. It started on Make.com and has been migrated so no external automation tool is needed (the Make.com endpoints are kept for backwards compatibility).
+The whole workflow runs **natively in the Python backend** (FastAPI + several job sources + Gemini/Groq + Telegram), with a React dashboard on top. Version 2 adds multiple job sources with health tracking, cross-source de-duplication, an explainable score computed in code, Telegram approve/skip buttons, and safe applying (dry-run by default). The old Make.com endpoints are kept for backwards compatibility.
 
 ---
 
 ## ✨ Features
 
-- 🔎 **Automated Job Discovery:** Fetches listings from the JSearch API (RapidAPI) for your active role and preferred locations.
-- 🧠 **AI-Powered Job Matching:** Uses Google Gemini to compare job requirements with your resume, skills, and goals.
-- 🎯 **Smart Match Scoring:** Assigns a score from 0 to 10 with a short explanation of the match.
-- ✍️ **Personalized Cover Letters:** Generates job-specific cover letters from your resume and the posting.
-- ⚡ **Native Automation Pipeline:** Discovery → duplicate & experience pre-filter → AI scoring → threshold → save → Telegram alert, with per-job fault isolation and a single-run lock.
-- 🔁 **Resilient:** Automatic retry with exponential backoff on timeouts and rate limits (JSearch, Gemini, Telegram).
-- ⏰ **Built-in Scheduler:** Set `AUTO_RUN_INTERVAL_MINUTES` to run the pipeline automatically; run status is available at `/api/automation/status`.
-- 📊 **Dashboard & Analytics:** React UI with live run results, application funnel, score distribution, jobs-over-time, top companies and sources.
-- 🔍 **Advanced Filtering:** Filter by text, score, experience, status, location, source and date; sort by newest, score or company.
-- 🧩 **Resume Fit & Skill Gaps:** One-click Gemini analysis of your resume against any job (matched skills, missing skills, resume tips).
-- 📥 **CSV Export:** Download all jobs as a spreadsheet-ready CSV.
-- 📬 **Telegram Notifications:** Sends job details, match scores, and links for qualifying jobs.
-- 🗂️ **Application Tracking:** Tracks status from To Apply through Offer/Rejected.
+- 🔎 **Multi-source discovery:** JSearch, Adzuna India, Jooble India, company career boards (Greenhouse, Lever, Ashby) and, optionally, Internshala and Indeed/LinkedIn (experimental, off by default). Each source is isolated, retried, health-tracked and budgeted (JSearch: 150 of 200 free requests per month).
+- 🧬 **Cross-source de-duplication:** the same opening from several sources becomes one job that remembers every source and keeps the richest description.
+- 🧮 **Explainable scoring:** a 0-10 score computed in code from five weighted parts (skills, role fit, experience, preferences, freshness). AI only extracts facts (verified against the posting text). Each job shows a breakdown with matched and missing skills.
+- 🧱 **Hard filters:** experience, location, job type, blocked companies and keywords, before any AI cost.
+- 🤖 **AI provider fallback:** Gemini, then Groq, then OpenRouter; rate limits and outages fall through automatically. Only the top jobs per run use AI (cost control).
+- ✍️ **Personalized cover letters:** written for qualifying jobs, or on demand from Telegram.
+- 📬 **Telegram approvals:** alerts with Approve / Skip / Cover letter buttons (webhook or local polling); only your chat is obeyed.
+- 📮 **Safe applying:** after approval, e-mail the recruiter (dry-run by default, daily cap) or get an assisted apply (link + cover letter ready). Every attempt is logged.
+- 📈 **Learning:** after 30+ decisions, suggests new score weights from what you approve (guard-railed, applied only on request).
+- 🗄️ **Migrations:** Alembic; existing V1 databases upgrade in place on startup.
+- 🔁 **Resilient:** retries with backoff, a run survives a failing source, the API starts even when the database is down (`/api/health`).
+- 📊 **Dashboard & Analytics:** live run results, funnel, score distribution, jobs over time, top companies and sources; filters incl. decision status; CSV export.
+- 🧩 **Resume fit & skill gaps:** one-click AI analysis of your resume against any job.
+- 🗂️ **Application tracking:** To Apply through Offer/Rejected.
 
-> The system assists with job discovery and application preparation. It does not automatically submit job applications.
+> Applying only happens after you approve a job, and e-mail applications are dry-run until you set `APPLY_DRY_RUN=false`. Logged-in automation on LinkedIn, Naukri or Internshala is deliberately not supported.
 
 ---
 
@@ -32,28 +33,31 @@ The whole workflow runs **natively in the Python backend** (FastAPI + Google Gem
 
 ```mermaid
 flowchart TD
-    S[Scheduler / "Find New Jobs" button] --> P[Pipeline Orchestrator]
-    P --> A[JSearch API]
-    A --> D{Duplicate or too senior?}
-    D -- Yes --> X[Skip, no AI cost]
-    D -- No --> G[Gemini: score + cover letter]
-    G --> T{Score >= min score?}
+    S[Scheduler / Find New Jobs button] --> R[Source runner]
+    R --> J[JSearch] & AZ[Adzuna] & JO[Jooble] & ATS[Greenhouse / Lever / Ashby] & EX[Internshala, JobSpy - optional]
+    J & AZ & JO & ATS & EX --> D[Cross-source de-duplication]
+    D --> F{Known job or hard filter?}
+    F -- Yes --> X[Skip, no AI cost]
+    F -- No --> PS[Keyword pre-score]
+    PS --> AI[Top N: AI facts via Gemini / Groq]
+    AI --> SC[Weighted score + breakdown]
+    SC --> T{Score >= min score?}
     T -- No --> X
     T -- Yes --> DB[(Database)]
-    DB --> TG[Telegram alert]
-    DB --> API[FastAPI REST API]
-    API --> UI[React Dashboard]
+    DB --> TG[Telegram alert: Approve / Skip / Cover letter]
+    TG --> AP[Approve: e-mail dry run or assisted apply]
+    DB --> UI[React Dashboard]
 ```
 
 ### How It Works
 
-1. **Trigger:** The scheduler, or the dashboard's "Find New Jobs" button, starts the pipeline in the background.
-2. **Discovery:** JSearch returns listings for your active role and locations.
-3. **Pre-filter:** Duplicates and jobs requiring too much experience are skipped before any AI call.
-4. **AI Evaluation:** Gemini scores the job against your active resume and writes a cover letter.
-5. **Threshold:** Only jobs at or above your minimum match score are kept.
-6. **Storage & Alerts:** Jobs are saved, then a Telegram alert is sent (a failed alert never loses a job).
-7. **Dashboard:** The UI shows the run result, job list, tracker, and analytics.
+1. **Trigger:** the scheduler or the dashboard's "Find New Jobs" button starts a run (one at a time, 2-minute cooldown).
+2. **Discovery:** every enabled source is queried independently; failures are recorded per source.
+3. **De-duplication:** listings of the same job across sources are merged; jobs already in the database are only marked as seen again.
+4. **Hard filters:** experience, location, job type and blocked companies/keywords.
+5. **Scoring:** a keyword pre-score for all jobs; the top 15 get AI-extracted facts; the final score is computed in code with a breakdown.
+6. **Storage & alerts:** qualifying jobs are saved and sent to Telegram with buttons.
+7. **Approve / Skip:** from Telegram or the dashboard. Approving starts the safest apply method and every decision becomes training data for the weights.
 
 ---
 
@@ -63,12 +67,12 @@ flowchart TD
 |---|---|
 | Frontend | React, Vite, JavaScript, CSS |
 | Backend | Python, FastAPI |
-| Database | SQLite (local) / PostgreSQL (production), SQLAlchemy |
-| AI / LLM | Google Gemini 2.5 Flash |
-| Job Data | JSearch (RapidAPI) |
+| Database | SQLite (local) / PostgreSQL (production), SQLAlchemy, Alembic migrations |
+| AI / LLM | Google Gemini (configurable model), Groq (OpenAI-compatible), optional OpenRouter |
+| Job Data | JSearch, Adzuna, Jooble, Greenhouse / Lever / Ashby boards, optional Internshala and JobSpy |
 | Notifications | Telegram Bot API |
 | API Communication | REST API, HTTP, JSON |
-| Authentication | API key for machine endpoints |
+| Authentication | Optional admin key for approve/apply endpoints; API key for legacy machine endpoints |
 | Deployment | Render (backend), Vercel (frontend) |
 | Version Control | Git, GitHub |
 
@@ -83,14 +87,21 @@ Job-Application-Autopilot/
 │   ├── main.py            # FastAPI app & endpoints
 │   ├── crud.py            # Database operations
 │   ├── models.py / schemas.py / database.py
+│   ├── alembic/           # database migrations (run automatically on startup)
 │   ├── services/
-│   │   ├── pipeline.py    # Automation orchestrator + run status
-│   │   ├── jsearch_service.py      # Job discovery
-│   │   ├── ai_service.py           # Gemini scoring, cover letters, fit analysis
-│   │   ├── notification_service.py # Telegram alerts
+│   │   ├── pipeline.py             # Automation orchestrator + run status
+│   │   ├── sources/                # Job source plugins, registry, runner (budgets, health)
+│   │   ├── dedupe.py, geo.py, matching.py   # De-duplication, locations, role similarity
+│   │   ├── scoring/                # Profile, facts, filters, score engine, weights, tuning, cover letters
+│   │   ├── llm/                    # AI provider layer (Gemini, Groq, OpenRouter)
+│   │   ├── telegram_bot.py         # Approve / Skip / Cover letter buttons
+│   │   ├── apply/                  # Safe applying (e-mail dry-run, assisted)
+│   │   ├── ai_service.py           # Gemini calls, fit analysis
+│   │   ├── jsearch_service.py      # JSearch client
+│   │   ├── notification_service.py # Telegram messages
 │   │   ├── analytics.py            # Stats aggregation & CSV export
 │   │   └── retry.py                # Retry with exponential backoff
-│   ├── test_*.py          # Offline test scripts (run with python)
+│   ├── test_*.py          # Offline test scripts; run_tests.py runs them all
 │   └── requirements.txt
 │
 ├── frontend/
@@ -148,14 +159,22 @@ pip install -r requirements.txt
 Copy `backend/.env.example` to `backend/.env` and fill in your keys:
 
 ```env
-RAPIDAPI_KEY=...          # JSearch job discovery
-GEMINI_API_KEY=...        # AI scoring, cover letters, fit analysis
-TELEGRAM_BOT_TOKEN=...    # optional alerts
-TELEGRAM_CHAT_ID=...
-MAKE_API_KEY=...          # only for the legacy /api/make/* and POST /api/jobs endpoints
 DATABASE_URL=sqlite:///./jobs.db
-AUTO_RUN_INTERVAL_MINUTES=360   # optional scheduler (0 = off)
+RAPIDAPI_KEY=...              # JSearch
+ADZUNA_APP_ID=...
+ADZUNA_APP_KEY=...
+JOOBLE_API_KEY=...
+GEMINI_API_KEY=...            # and/or GROQ_API_KEY (at least one AI key)
+GROQ_API_KEY=...
+TELEGRAM_BOT_TOKEN=...        # alerts + Approve/Skip buttons
+TELEGRAM_CHAT_ID=...
+TELEGRAM_WEBHOOK_SECRET=...   # for the webhook (or TELEGRAM_MODE=polling locally)
+ADMIN_API_KEY=...             # recommended: protects approve/skip/apply
+APPLY_DRY_RUN=true            # default; nothing is e-mailed until false + SMTP_* are set
+AUTO_RUN_INTERVAL_MINUTES=0   # optional scheduler
 ```
+
+See `backend/.env.example` and [docs/deployment.md](docs/deployment.md) for every variable (SMTP, budgets, models, cooldowns).
 
 Then upload a resume for your active role on the **Resumes** page and click **Find New Jobs** on the Dashboard.
 
@@ -163,11 +182,11 @@ Then upload a resume for your active role on the **Resumes** page and click **Fi
 
 ### Run the Tests
 
-The tests are offline scripts (no live API calls). From `backend/`:
+The tests are offline scripts (no live API calls; HTTP, Telegram and SMTP are mocked). From `backend/`:
 
 ```bash
-python test_pipeline.py && python test_features.py && python test_suite.py && python test_phase1.py
-python test_jsearch.py && python test_ai_service.py && python test_notification_service.py
+python run_tests.py          # runs every test_*.py and prints a pass count per suite
+python test_pipeline.py      # or any single suite
 ```
 
 ### 4. Run the Backend
@@ -231,11 +250,25 @@ The FastAPI backend provides REST endpoints for job management.
 | DELETE | `/api/resumes/{id}` | Delete a resume and its PDF from disk |
 | GET | `/api/settings` | Retrieve unified job search & automation settings |
 | PUT | `/api/settings` | Update settings (roles, min score, locations, webhook URL) |
-| POST | `/api/automation/trigger` | Start the native discovery pipeline in the background (`already_running` if busy) |
-| GET | `/api/automation/status` | Whether the pipeline is running + summary of the last run |
+| POST | `/api/automation/trigger` | Start the pipeline in the background (`already_running` if busy; 429 within the cooldown) |
+| GET | `/api/automation/status` | Running flag, last run summary (per-source counts, merges; survives restarts) and source health |
 | GET | `/api/analytics?days=30` | Funnel, score distribution, jobs-over-time, top companies, sources |
 | GET | `/api/export/jobs.csv` | Download all jobs as CSV |
-| POST | `/api/jobs/{id}/analyze` | Gemini skill-gap analysis of the active resume vs. this job |
+| POST | `/api/jobs/{id}/analyze` | AI skill-gap analysis of the active resume vs. this job |
+| GET | `/api/health` | Liveness + database check (503 when the database is unreachable) |
+| GET | `/api/sources` | Sources with enabled / configured / experimental flags and health |
+| PUT | `/api/sources/{name}` | Enable or disable a source (`{"enabled": true}`) |
+| GET / PUT | `/api/settings/ats-companies` | Company career boards to watch (Greenhouse / Lever / Ashby) |
+| GET | `/api/ai/providers` | AI providers in fallback order and their models (no keys) |
+| GET / PUT | `/api/scoring/weights` | Score weights (must add up to 100) |
+| POST | `/api/scoring/tune?apply=false` | Suggest weights from decisions (admin key) |
+| POST | `/api/jobs/{id}/approve`, `/api/jobs/{id}/skip` | Decide on a job (admin key); approving starts the apply step |
+| POST | `/api/jobs/{id}/apply` | Retry applying for an approved job (admin key) |
+| GET | `/api/applications`, `/api/applications/config` | Application log; dry-run flag, daily cap, SMTP status |
+| POST | `/api/telegram/webhook` | Telegram updates (secret header required) |
+| POST | `/api/telegram/set-webhook` | Register the webhook with Telegram (admin key) |
+
+`GET /api/jobs` also accepts `approval_status=pending|approved|skipped`. "Admin key" means the `X-Admin-Key` header, required only when `ADMIN_API_KEY` is set.
 
 The Make.com guide ([docs/make_automation_guide.md](docs/make_automation_guide.md)) is kept for reference only; the native pipeline replaces it.
 For hosting and cloud persistence guidelines, see [Production Deployment Guide](docs/deployment.md).
@@ -271,40 +304,32 @@ x-api-key: YOUR_API_KEY
 
 ---
 
-## 🧠 AI Job Matching
+## 🧠 Job Matching (explainable score)
 
-The matching system evaluates job listings using a candidate profile that includes:
+The score (0-10) is computed in code, not guessed by an AI. Five parts, each between 0 and 1, are weighted (defaults below, editable in Settings, must add up to 100):
 
-- Programming languages and technical skills
-- AI, machine learning, and data science knowledge
-- Relevant projects and practical experience
-- Target job roles
-- Experience and eligibility requirements
+| Part | Weight | What it measures |
+|---|---|---|
+| Skills | 40 | Share of the posting's required skills found in your resume (aliases and fuzzy matching; nice-to-have count half) |
+| Role fit | 20 | Job title vs. your active role and the roles your resume targets |
+| Experience | 15 | Required years / seniority vs. your experience and maximum |
+| Preferences | 15 | Location (remote handled) and preferred job type |
+| Freshness | 10 | How recently the job was posted |
 
-Each job receives a score from **0 to 10**.
+AI (Gemini or Groq) extracts the facts for the top jobs of a run, and a structured profile once per resume version. Skills the posting does not mention are discarded. When only a short snippet is available (Adzuna, Jooble, Internshala), the skills part counts for less. A title that does not fit your roles caps the score at 6.5. The breakdown (bars, matched and missing skills) is shown on each job.
 
-| Score | Interpretation |
-|---|---|
-| 9–10 | Excellent match |
-| 7–8 | Good match |
-| 5–6 | Partial match |
-| 0–4 | Poor match |
-
-Only jobs with a score of **7 or above** pass through the current automation filter.
-
-The score is an AI-generated estimate, not a guarantee of eligibility or hiring success.
+Only jobs at or above your minimum match score (default 7) are saved and alerted.
 
 ---
 
 ## 🔐 Security and Data Handling
 
-- Job creation is protected through API key verification.
-- The backend reads the expected key from an environment variable.
-- API credentials should be stored securely in the relevant service configurations.
-- SQLite is used to store job records.
-- Applications are not submitted automatically.
-
-**Deployment note:** The current backend is hosted on Render's free service and uses SQLite. Free hosting can experience cold starts, and ephemeral storage should not be treated as permanent production storage.
+- Secrets live in environment variables (`backend/.env` locally); they are redacted from stored errors and never returned by the API.
+- `ADMIN_API_KEY` (optional) protects approve/skip/apply, Telegram webhook registration and weight tuning. A key placed in the frontend build is readable by anyone who can load the site.
+- The Telegram webhook requires the `TELEGRAM_WEBHOOK_SECRET` header and only obeys `TELEGRAM_CHAT_ID`.
+- The trigger endpoint has a cooldown because every run spends API quota.
+- E-mail applying is dry-run by default and capped per day; nothing is applied for without approval.
+- Scraped sources use public pages only, at low volume, and are off by default.
 
 ---
 
@@ -323,16 +348,18 @@ The React frontend can be run locally using Vite. To publish it, deploy it separ
 ## 🚧 Future Enhancements
 
 - [x] Native Python pipeline replacing Make.com
-- [x] Job deduplication to prevent repeated listings
-- [x] Advanced filtering (text, score, experience, status, location, source, date) and sorting
-- [x] Resume upload per target role
-- [x] Resume-to-job compatibility analysis
-- [x] Application progress analytics and visualizations
-- [x] Retry with backoff and run-status reporting
-- [x] Built-in scheduler and CSV export
-- [ ] Persistent cloud database (PostgreSQL supported via `DATABASE_URL`; needs a hosted instance)
-- [ ] Salary filtering (needs a new database column and a migration tool)
-- [ ] Integration with additional job sources
+- [x] Job deduplication (now also across sources)
+- [x] Advanced filtering and sorting, CSV export, analytics
+- [x] Resume upload per role and fit analysis
+- [x] Retry with backoff, run-status reporting, built-in scheduler
+- [x] Database migrations (Alembic)
+- [x] Multiple job sources with health and budgets
+- [x] Explainable scoring and AI provider fallback
+- [x] Telegram approve/skip and safe applying (e-mail dry-run, assisted)
+- [x] Weight tuning from decisions
+- [ ] Career-page form filling (Greenhouse / Lever / Ashby) via a headless browser
+- [ ] Gmail tracking of replies, tailored resumes per job, follow-up reminders
+- [ ] Salary filtering
 - [ ] User authentication and multi-profile support
 
 ---
