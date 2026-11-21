@@ -270,3 +270,5 @@ export const skipJob = (id) => jsonRequest(`${API_URL}/jobs/${id}/skip`, 'POST',
 export const fetchApplications = () => jsonRequest(`${API_URL}/applications`);
 export const fetchApplicationsConfig = () => jsonRequest(`${API_URL}/applications/config`);
 export const retryApplication = (jobId) => jsonRequest(`${API_URL}/jobs/${jobId}/apply`, 'POST', undefined, true);
+export const tuneScoringWeights = (apply = false) =>
+  jsonRequest(`${API_URL}/scoring/tune?apply=${apply ? 'true' : 'false'}`, 'POST', undefined, true);

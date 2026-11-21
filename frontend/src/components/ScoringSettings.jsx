@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Scale, Save, RotateCcw, AlertCircle, CheckCircle } from 'lucide-react';
-import { fetchScoringWeights, updateScoringWeights } from '../api';
+import { Scale, Save, RotateCcw, AlertCircle, CheckCircle, Wand2 } from 'lucide-react';
+import { fetchScoringWeights, updateScoringWeights, tuneScoringWeights } from '../api';
 
 const HELP = {
   skills: 'Share of the skills the posting asks for that your resume shows (nice-to-have skills count half).',
@@ -16,6 +16,7 @@ const ScoringSettings = () => {
   const [parts, setParts] = useState([]);
   const [message, setMessage] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [suggestion, setSuggestion] = useState(null);
 
   useEffect(() => {
     fetchScoringWeights()
@@ -43,6 +44,22 @@ const ScoringSettings = () => {
       setSaving(false);
     }
   };
+
+  const suggest = async (apply) => {
+    setMessage(null);
+    try {
+      const res = await tuneScoringWeights(apply);
+      setSuggestion(res);
+      if (res.applied) {
+        setWeights(res.new_weights);
+        setMessage({ type: 'success', text: 'Suggested weights applied.' });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  const changed = suggestion && parts.some((p) => suggestion.new_weights[p] !== suggestion.old_weights[p]);
 
   return (
     <div className="card" style={{ maxWidth: '850px', marginBottom: '2rem' }}>
@@ -73,6 +90,11 @@ const ScoringSettings = () => {
           style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <RotateCcw size={14} /> Defaults
         </button>
+        <button type="button" className="btn btn-outline" onClick={() => suggest(false)}
+          style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+          title="Learn from your Approve / Skip decisions (needs 30+). Shows a suggestion; nothing changes until you apply it.">
+          <Wand2 size={14} /> Suggest from my decisions
+        </button>
         {message && (
           <span style={{ fontSize: '0.85rem', display: 'inline-flex', gap: 4, alignItems: 'center',
             color: message.type === 'error' ? 'var(--danger)' : 'var(--success)' }}>
@@ -80,6 +102,27 @@ const ScoringSettings = () => {
           </span>
         )}
       </div>
+      {suggestion && (
+        <div style={{ marginTop: '1rem', padding: '0.75rem 1rem', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', fontSize: '0.85rem' }}>
+          <div style={{ marginBottom: '0.5rem' }}>
+            {suggestion.reason} ({suggestion.decisions_used} decisions: {suggestion.approved} approved, {suggestion.skipped} skipped)
+          </div>
+          {changed && (
+            <>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                {parts.map((p) => (
+                  <span key={p} style={{ textTransform: 'capitalize' }}>
+                    {p}: {suggestion.old_weights[p]} → <strong>{suggestion.new_weights[p]}</strong>
+                  </span>
+                ))}
+              </div>
+              {!suggestion.applied && (
+                <button type="button" className="btn btn-primary" onClick={() => suggest(true)}>Apply suggestion</button>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };

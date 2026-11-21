@@ -31,7 +31,7 @@ from services import notification_service
 from services.decisions import record_decision
 from services.apply import emailer as apply_emailer, service as apply_service
 from services.retry import retry_call
-from services.scoring import weights as scoring_weights
+from services.scoring import tuning as scoring_tuning, weights as scoring_weights
 from services.sources import registry as source_registry
 
 logger = logging.getLogger("job_autopilot")
@@ -728,6 +728,15 @@ def update_scoring_weights(payload: dict, db: Session = Depends(get_db)):
     except scoring_weights.WeightsError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"weights": weights, "defaults": scoring_weights.DEFAULT_WEIGHTS, "parts": list(scoring_weights.PARTS)}
+
+
+@app.post("/api/scoring/tune", dependencies=[Depends(require_admin)])
+def tune_scoring_weights(apply: bool = Query(False), db: Session = Depends(get_db)):
+    """
+    Suggest weights learned from approve/skip decisions (needs 30+ decisions). Shows old vs new and
+    only saves them with ?apply=true. Needs X-Admin-Key when ADMIN_API_KEY is set.
+    """
+    return scoring_tuning.tune(db, apply=apply)
 
 
 def _on_approved(db: Session, job: models.Job) -> Optional[models.Application]:

@@ -7,4 +7,5 @@ filters.py   hard filters (experience, location, job type, blocked companies/key
 engine.py    the weighted 0-10 score and its breakdown, computed in code
 weights.py   editable part weights (sum to 100)
 writer.py    cover letters (AI, task "write")
+tuning.py    learning the weights from approve/skip decisions (V2.4)
 """
