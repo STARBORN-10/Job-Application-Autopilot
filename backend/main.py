@@ -18,20 +18,23 @@ from typing import List, Optional
 
 import PyPDF2
 
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+
 import models, schemas, crud
+import db_migrations
 from database import SessionLocal, engine, get_db
+from security import trigger_cooldown
 from services.pipeline import run_automation_pipeline, get_pipeline_status
-from services import ai_service, analytics as analytics_service
+from services import ai_service, analytics as analytics_service, llm
 from services.retry import retry_call
+from services.sources import registry as source_registry
 
 logger = logging.getLogger("job_autopilot")
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
-
 # ---------------------------------------------------------------------------
-# DB table creation
+# Database schema
 # ---------------------------------------------------------------------------
-# Tables are created in the lifespan handler below (with retries), so the app can still
+# Alembic migrations run in the lifespan handler below (with retries), so the app can still
 # start and report a clear health status when the database is temporarily unreachable.
 
 # ---------------------------------------------------------------------------
@@ -63,10 +66,10 @@ _db_state = {"ready": False, "error": None}
 
 
 async def _init_db_with_retry(retry_seconds: float = 30.0):
-    """Create tables; if the database is unreachable (e.g. a paused hosted DB), keep retrying."""
+    """Run migrations (upgrade head); if the database is unreachable (e.g. a paused hosted DB), keep retrying."""
     while True:
         try:
-            await asyncio.to_thread(models.Base.metadata.create_all, bind=engine)
+            await asyncio.to_thread(db_migrations.upgrade_database, engine)
             _db_state["ready"], _db_state["error"] = True, None
             logger.info("Database ready.")
             return
@@ -239,9 +242,13 @@ def health():
 # ===========================================================================
 
 @app.get("/api/jobs", response_model=List[schemas.JobResponse])
-def read_jobs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    jobs = crud.get_jobs(db, skip=skip, limit=limit)
-    return jobs
+def read_jobs(
+    skip: int = 0,
+    limit: int = 100,
+    approval_status: Optional[str] = Query(None, pattern="^(pending|approved|skipped)$"),
+    db: Session = Depends(get_db),
+):
+    return crud.get_jobs(db, skip=skip, limit=limit, approval_status=approval_status)
 
 @app.get("/api/jobs/{job_id}", response_model=schemas.JobResponse)
 def read_job(job_id: int, db: Session = Depends(get_db)):
@@ -617,12 +624,20 @@ def update_experience_filter(payload: schemas.ExperienceFilterSettings, db: Sess
 def trigger_automation(background_tasks: BackgroundTasks):
     """
     Trigger the native Python automation pipeline in the background.
+    Rate limited: one manual start per TRIGGER_COOLDOWN_SECONDS (default 120 s), because each run
+    spends API quota (JSearch: 200 requests/month on the free plan).
     """
     if get_pipeline_status()["running"]:
         return schemas.AutomationTriggerResponse(
             status="already_running",
             message="Automation pipeline is already running. Check /api/automation/status for progress.",
             details={},
+        )
+    wait = trigger_cooldown.try_acquire()
+    if wait > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"A run was started recently. Please wait {int(wait) + 1} more second(s) before starting another.",
         )
     # Start the pipeline as a background task. The pipeline will manage its own DB session if needed.
     background_tasks.add_task(run_automation_pipeline)
@@ -634,6 +649,54 @@ def trigger_automation(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/automation/status")
-def automation_status():
-    """Report whether the pipeline is running and the summary of the last finished run."""
-    return get_pipeline_status()
+def automation_status(db: Session = Depends(get_db)):
+    """Whether the pipeline is running, the last finished run (survives restarts) and per-source health."""
+    try:
+        return get_pipeline_status(db)
+    except Exception as exc:
+        logger.warning(f"Status with database details failed ({type(exc).__name__}); returning in-memory status")
+        return get_pipeline_status()
+
+
+# ===========================================================================
+# V2: job sources & AI providers
+# ===========================================================================
+
+@app.get("/api/sources")
+def list_sources(db: Session = Depends(get_db)):
+    """Every job source with enabled/configured/experimental flags and its last health record."""
+    return source_registry.describe_sources(db)
+
+
+@app.put("/api/sources/{name}")
+def toggle_source(name: str, payload: schemas.SourceToggle, db: Session = Depends(get_db)):
+    if source_registry.get_source(name) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown source '{name}'")
+    source_registry.set_enabled(db, name, payload.enabled)
+    return next(s for s in source_registry.describe_sources(db) if s["name"] == name)
+
+
+@app.get("/api/settings/ats-companies", response_model=schemas.AtsCompanyList)
+def get_ats_companies(db: Session = Depends(get_db)):
+    return {"companies": source_registry.get_ats_companies(db)}
+
+
+@app.put("/api/settings/ats-companies", response_model=schemas.AtsCompanyList)
+def update_ats_companies(payload: schemas.AtsCompanyList, db: Session = Depends(get_db)):
+    if len(payload.companies) > 25:
+        raise HTTPException(status_code=422, detail="At most 25 companies (each one is a request per run).")
+    companies = [c.model_dump() for c in payload.companies]
+    for c in companies:
+        c["name"] = c.get("name") or c["token"]
+    source_registry.set_ats_companies(db, companies)
+    return {"companies": companies}
+
+
+@app.get("/api/ai/providers")
+def ai_providers():
+    """Configured AI providers in fallback order (never returns keys)."""
+    return [
+        {"name": p.name, "configured": p.is_configured(), "extract_model": p.model_for("extract"),
+         "write_model": p.model_for("write")}
+        for p in llm.provider_order()
+    ]

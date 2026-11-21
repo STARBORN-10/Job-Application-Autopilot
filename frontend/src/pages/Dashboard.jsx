@@ -52,8 +52,13 @@ const Dashboard = () => {
       if (!mountedRef.current) return;
 
       const run = status?.last_run;
+      // Per-source outcome, e.g. "jsearch 10, adzuna 38, jooble error".
+      const perSource = Object.entries(run?.sources || {})
+        .filter(([, r]) => r.status === 'ok' || r.status === 'error')
+        .map(([name, r]) => (r.status === 'ok' ? `${name} ${r.count}` : `${name} error`))
+        .join(', ');
       if (run?.status === 'success') {
-        setTriggerAlert({ type: 'success', message: run.message });
+        setTriggerAlert({ type: 'success', message: perSource ? `${run.message} Sources: ${perSource}.` : run.message });
       } else {
         const msg = run?.message || 'Automation did not finish in time. Check back shortly.';
         setTriggerAlert({

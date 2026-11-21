@@ -39,6 +39,12 @@ def run_all_pipeline_tests():
     print("RUNNING OFFLINE PIPELINE ORCHESTRATOR TESTS")
     print("=" * 70)
 
+    # V2: the pipeline runs every enabled source. Keep this suite offline and focused on the
+    # orchestration logic by enabling only JSearch (whose fetch_jobs is mocked below).
+    sources_patch = patch("services.sources.registry.enabled_map", return_value={"jsearch": True})
+    sources_patch.start()
+    os.environ.setdefault("RAPIDAPI_KEY", "offline-test-key")
+
     total_tests = 0
     passed_tests = 0
 
@@ -475,6 +481,7 @@ def run_all_pipeline_tests():
     print(f"ALL {total_tests} PIPELINE ORCHESTRATOR TESTS PASSED! ({passed_tests}/{total_tests})")
     print("=" * 70)
 
+    sources_patch.stop()
     db.close()
 
 

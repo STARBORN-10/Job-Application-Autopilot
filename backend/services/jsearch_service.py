@@ -11,8 +11,10 @@ import httpx
 
 try:
     from schemas import JobCreate
+    from services.sources.common import parse_datetime
 except ImportError:
     from backend.schemas import JobCreate
+    from backend.services.sources.common import parse_datetime
 
 logger = logging.getLogger("jsearch_service")
 logger.setLevel(logging.INFO)
@@ -214,9 +216,14 @@ def normalize_jsearch_job(raw_job: Dict[str, Any]) -> Optional[JobCreate]:
 
     location = extract_location(raw_job)
     experience = extract_experience_text(raw_job)
+    posted = parse_datetime(raw_job.get("job_posted_at_datetime_utc") or raw_job.get("job_posted_at_timestamp"))
+    external_id = raw_job.get("job_id")
 
     try:
         return JobCreate(
+            posted_date=posted,
+            external_id=str(external_id) if external_id else None,
+            description_quality="full",
             title=title.strip(),
             company=company.strip(),
             url=url.strip() if url else None,

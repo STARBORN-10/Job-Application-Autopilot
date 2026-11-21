@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { fetchGeneralSettings, updateGeneralSettings, triggerAutomation } from '../api';
+import SourcesSettings from '../components/SourcesSettings';
 import {
   Save,
   CheckCircle,
@@ -10,7 +11,6 @@ import {
   MapPin,
   Star,
   Link as LinkIcon,
-  HelpCircle,
 } from 'lucide-react';
 
 const TARGET_ROLES = [
@@ -44,7 +44,7 @@ const Settings = () => {
       try {
         const data = await fetchGeneralSettings();
         setSettings(data);
-      } catch (err) {
+      } catch {
         setErrorMessage('Failed to load settings from backend. Is the server running?');
       } finally {
         setLoading(false);
@@ -210,6 +210,22 @@ const Settings = () => {
               Comma-separated list of target role profiles configured in your system.
             </div>
           </div>
+
+          <div className="form-group">
+            <label className="form-label">Ignore postings older than (days)</label>
+            <input
+              type="number"
+              className="form-control"
+              min="1"
+              max="365"
+              value={settings.max_job_age_days ?? 30}
+              onChange={(e) => setSettings({ ...settings, max_job_age_days: parseInt(e.target.value, 10) || 30 })}
+              style={{ maxWidth: 160 }}
+            />
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+              Sources that report a posting date drop older jobs. Company career boards list only open roles, so they are not age-filtered.
+            </div>
+          </div>
         </div>
 
         {/* Section 2: Experience Filter */}
@@ -329,6 +345,10 @@ const Settings = () => {
           )}
         </div>
       </form>
+
+      <div style={{ marginTop: '2.5rem' }}>
+        <SourcesSettings />
+      </div>
     </div>
   );
 };

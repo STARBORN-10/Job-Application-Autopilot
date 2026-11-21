@@ -1,26 +1,65 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import Optional
+from typing import Optional, Any
+import datetime
 import json
 import models, schemas
+from services.dedupe import canonical_url as make_canonical_url
+
+
+def _utcnow() -> datetime.datetime:
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
 
 # ---------------------------------------------------------------------------
-# Job CRUD (unchanged)
+# Job CRUD
 # ---------------------------------------------------------------------------
 
 def get_job(db: Session, job_id: int):
     return db.query(models.Job).filter(models.Job.id == job_id).first()
 
-def get_jobs(db: Session, skip: int = 0, limit: int = 100):
+def get_jobs(db: Session, skip: int = 0, limit: int = 100, approval_status: Optional[str] = None):
     # Newest first, so a limit never hides the most recently found jobs.
-    return db.query(models.Job).order_by(models.Job.id.desc()).offset(skip).limit(limit).all()
+    q = db.query(models.Job)
+    if approval_status:
+        q = q.filter(func.coalesce(models.Job.approval_status, "pending") == approval_status)
+    return q.order_by(models.Job.id.desc()).offset(skip).limit(limit).all()
 
 def create_job(db: Session, job: schemas.JobCreate):
-    db_job = models.Job(**job.model_dump())
+    data = job.model_dump()
+    # JSON-valued fields are stored as text.
+    names = data.pop("source_names", None) or ([job.source] if job.source else [])
+    data["source_names"] = json.dumps(names)
+    breakdown = data.pop("score_breakdown", None)
+    data["score_breakdown"] = json.dumps(breakdown) if breakdown is not None else None
+    if data.get("posted_date") is None:
+        data.pop("posted_date", None)  # let the column default (now) apply, as in V1
+    if not data.get("canonical_url") and job.url:
+        data["canonical_url"] = make_canonical_url(job.url)
+    data.setdefault("approval_status", "pending")
+    data["last_seen"] = _utcnow()
+    db_job = models.Job(**data)
     db.add(db_job)
     db.commit()
     db.refresh(db_job)
     return db_job
+
+
+def touch_existing_job(db: Session, existing: models.Job, seen_sources: list[str]) -> models.Job:
+    """A known job was returned again: record when, and by which sources."""
+    try:
+        names = json.loads(existing.source_names) if existing.source_names else []
+    except ValueError:
+        names = []
+    if not names and existing.source:
+        names = [existing.source]
+    for name in seen_sources:
+        if name and name not in names:
+            names.append(name)
+    existing.source_names = json.dumps(names)
+    existing.last_seen = _utcnow()
+    db.commit()
+    return existing
 
 def update_job(db: Session, job_id: int, job: schemas.JobUpdate):
     db_job = db.query(models.Job).filter(models.Job.id == job_id).first()
@@ -43,9 +82,15 @@ def delete_job(db: Session, job_id: int):
 def find_duplicate_job(db: Session, job: schemas.JobCreate) -> Optional[models.Job]:
     """
     Check if a job already exists in the database.
-    1. Primary check: Exact or normalized URL match.
+    1. Primary check: Exact or normalized URL match (including the V2 canonical URL).
     2. Fallback check: Case-insensitive Title + Company match when URL is missing/empty.
     """
+    canonical = job.canonical_url or (make_canonical_url(job.url) if job.url else None)
+    if canonical:
+        existing = db.query(models.Job).filter(models.Job.canonical_url == canonical).first()
+        if existing:
+            return existing
+
     if job.url and job.url.strip():
         clean_url = job.url.strip()
         url_variants = [clean_url, clean_url.rstrip("/"), clean_url.rstrip("/") + "/"]
@@ -212,6 +257,19 @@ def set_setting(db: Session, key: str, value: str) -> models.AppSettings:
     db.refresh(row)
     return row
 
+def get_json_setting(db: Session, key: str, default: Any = None) -> Any:
+    """Read a JSON-valued setting; returns `default` when missing or unreadable."""
+    raw = get_setting(db, key, "")
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return default
+
+def set_json_setting(db: Session, key: str, value: Any) -> None:
+    set_setting(db, key, json.dumps(value, default=str))
+
 def get_experience_filter_settings(db: Session) -> schemas.ExperienceFilterSettings:
     """Retrieve structured experience filter settings from DB with fallback defaults."""
     raw = get_setting(db, "experience_filter", "{}")
@@ -243,6 +301,10 @@ def get_general_settings(db: Session) -> schemas.GeneralSettings:
         active_role=data.get("active_role", exp_settings.active_role or defaults.active_role),
         max_years_experience=int(data.get("max_years_experience", exp_settings.max_years_experience)),
         filter_enabled=bool(data.get("filter_enabled", exp_settings.filter_enabled)),
+        preferred_job_types=data.get("preferred_job_types", defaults.preferred_job_types),
+        blocked_companies=data.get("blocked_companies", defaults.blocked_companies),
+        blocked_keywords=data.get("blocked_keywords", defaults.blocked_keywords),
+        max_job_age_days=int(data.get("max_job_age_days", defaults.max_job_age_days)),
     )
 
 def update_general_settings(db: Session, settings: schemas.GeneralSettings) -> schemas.GeneralSettings:

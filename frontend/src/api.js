@@ -231,3 +231,35 @@ export const triggerAutomation = async () => {
   }
   return response.json();
 };
+
+// ---------------------------------------------------------------------------
+// V2: sources, scoring, approvals, applications
+// ---------------------------------------------------------------------------
+
+// Optional: when the backend sets ADMIN_API_KEY, approve/skip/apply need it. A value baked into the
+// frontend build is visible to anyone who loads the site, so it only keeps out casual callers.
+const ADMIN_KEY = import.meta.env.VITE_ADMIN_API_KEY || '';
+
+const jsonRequest = async (url, method = 'GET', body, admin = false) => {
+  const headers = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+  if (admin && ADMIN_KEY) headers['X-Admin-Key'] = ADMIN_KEY;
+  const response = await apiFetch(url, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const detail = Array.isArray(err.detail) ? err.detail.map((d) => d.msg).join('; ') : err.detail;
+    throw new Error(detail || `Request failed (${response.status})`);
+  }
+  return response.json();
+};
+
+export const fetchSources = () => jsonRequest(`${API_URL}/sources`);
+export const toggleSource = (name, enabled) => jsonRequest(`${API_URL}/sources/${name}`, 'PUT', { enabled });
+export const fetchAtsCompanies = () => jsonRequest(`${API_URL}/settings/ats-companies`);
+export const updateAtsCompanies = (companies) =>
+  jsonRequest(`${API_URL}/settings/ats-companies`, 'PUT', { companies });
+export const fetchAiProviders = () => jsonRequest(`${API_URL}/ai/providers`);

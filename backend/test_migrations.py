@@ -1,0 +1,123 @@
+"""
+Offline tests for the Alembic migrations:
+- a fresh, empty database migrates to the latest schema,
+- a V1 database (tables created by V1's create_all, with rows) upgrades without losing data,
+- migrations are idempotent and the migrated schema matches models.py,
+- (if present) a copy of a real pre-V2 backup database upgrades cleanly.
+"""
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from testing_utils import Checker, use_temp_database
+
+use_temp_database()
+
+from sqlalchemy import create_engine, inspect, text
+
+import db_migrations
+import models
+
+V1_DDL = [
+    """CREATE TABLE jobs (id INTEGER NOT NULL PRIMARY KEY, title VARCHAR, company VARCHAR, url VARCHAR,
+       location VARCHAR, description TEXT, job_type VARCHAR, experience VARCHAR, source VARCHAR,
+       posted_date DATETIME, date_found DATETIME, score FLOAT, match_reason TEXT, cover_letter TEXT, status VARCHAR)""",
+    "CREATE INDEX ix_jobs_id ON jobs (id)",
+    "CREATE INDEX ix_jobs_title ON jobs (title)",
+    "CREATE INDEX ix_jobs_company ON jobs (company)",
+    """CREATE TABLE resumes (id INTEGER NOT NULL PRIMARY KEY, filename VARCHAR NOT NULL, target_role VARCHAR NOT NULL,
+       extracted_text TEXT, file_path VARCHAR NOT NULL, file_size INTEGER, is_active BOOLEAN,
+       uploaded_at DATETIME, updated_at DATETIME)""",
+    "CREATE INDEX ix_resumes_id ON resumes (id)",
+    "CREATE INDEX ix_resumes_target_role ON resumes (target_role)",
+    "CREATE TABLE app_settings (key VARCHAR NOT NULL PRIMARY KEY, value TEXT NOT NULL)",
+    "CREATE INDEX ix_app_settings_key ON app_settings (key)",
+]
+
+BACKUP = Path(os.getenv("V1_BACKUP_DB", r"C:\WINDOWS\TEMP\v2_samples\jobs.db.pre-v2.bak"))
+
+
+def _columns(engine, table):
+    return {c["name"] for c in inspect(engine).get_columns(table)}
+
+
+def run():
+    check = Checker("RUNNING OFFLINE MIGRATION TESTS")
+    tmp = Path(tempfile.mkdtemp())
+
+    check.section("1. Fresh database")
+    fresh = create_engine(f"sqlite:///{tmp / 'fresh.db'}")
+    db_migrations.upgrade_database(fresh)
+    tables = set(inspect(fresh).get_table_names())
+    check(set(models.Base.metadata.tables) <= tables, "All model tables exist after upgrade head")
+    check(db_migrations.current_revision(fresh) == "0002_v2_schema", "Revision is head (0002_v2_schema)")
+    for name, table in models.Base.metadata.tables.items():
+        check(_columns(fresh, name) == {c.name for c in table.columns}, f"Migrated '{name}' columns match models.py")
+
+    check.section("2. Existing V1 database (create_all era) with data")
+    v1 = create_engine(f"sqlite:///{tmp / 'v1.db'}")
+    with v1.begin() as conn:
+        for ddl in V1_DDL:
+            conn.exec_driver_sql(ddl)
+        conn.exec_driver_sql("INSERT INTO jobs (title, company, url, score, status) VALUES "
+                             "('ML Engineer', 'Acme', 'https://x/1', 8.5, 'To Apply'), "
+                             "('Data Analyst', 'Beta', 'https://x/2', 7.1, 'Applied')")
+        conn.exec_driver_sql("INSERT INTO resumes (filename, target_role, extracted_text, file_path, is_active) "
+                             "VALUES ('r.pdf', 'AI/ML Engineer', 'Python', '/tmp/r.pdf', 1)")
+        conn.exec_driver_sql("INSERT INTO app_settings (key, value) VALUES ('general_settings', '{}')")
+    db_migrations.upgrade_database(v1)
+    with v1.connect() as conn:
+        rows = conn.execute(text("SELECT title, score, status, approval_status FROM jobs ORDER BY id")).fetchall()
+        resumes = conn.execute(text("SELECT count(*) FROM resumes")).scalar()
+        settings = conn.execute(text("SELECT value FROM app_settings WHERE key='general_settings'")).scalar()
+    check(len(rows) == 2 and rows[0][0] == "ML Engineer" and rows[1][2] == "Applied", "Existing job rows survive")
+    check(rows[0][1] == 8.5, "Existing scores survive")
+    check(all(r[3] == "pending" for r in rows), "New approval_status column is 'pending' for old rows")
+    check(resumes == 1 and settings == "{}", "Resumes and settings survive")
+    check({"external_id", "canonical_url", "source_names", "score_breakdown", "description_quality",
+           "approval_status", "last_seen"} <= _columns(v1, "jobs"), "All new job columns were added")
+    check({"source_health", "job_decisions", "applications", "candidate_profiles", "api_usage"}
+          <= set(inspect(v1).get_table_names()), "All new tables were created")
+
+    check.section("3. Idempotency")
+    db_migrations.upgrade_database(v1)
+    db_migrations.upgrade_database(fresh)
+    with v1.connect() as conn:
+        check(conn.execute(text("SELECT count(*) FROM jobs")).scalar() == 2, "Re-running upgrade changes nothing")
+
+    check.section("4. ORM works on the migrated V1 database")
+    from sqlalchemy.orm import sessionmaker
+    import crud, schemas
+    session = sessionmaker(bind=v1)()
+    job = crud.create_job(session, schemas.JobCreate(title="New", company="Gamma", url="https://x/3?utm_source=a",
+                                                     source="adzuna", score_breakdown={"total": 7.0}))
+    check(job.canonical_url == "https://x/3" and job.approval_status == "pending", "New V2 row saved with V2 fields")
+    session.close()
+
+    check.section("5. Copy of a real pre-V2 database (optional)")
+    if BACKUP.exists():
+        copy = tmp / "backup_copy.db"
+        shutil.copyfile(BACKUP, copy)
+        eng = create_engine(f"sqlite:///{copy}")
+        with eng.connect() as conn:
+            before = {t: conn.execute(text(f"SELECT count(*) FROM {t}")).scalar() for t in ("jobs", "resumes", "app_settings")}
+        db_migrations.upgrade_database(eng)
+        with eng.connect() as conn:
+            after = {t: conn.execute(text(f"SELECT count(*) FROM {t}")).scalar() for t in ("jobs", "resumes", "app_settings")}
+        check(before == after, f"Row counts unchanged on the backup copy ({after})")
+        eng.dispose()
+    else:
+        print("  (skipped: no backup database found)")
+
+    for e in (fresh, v1):
+        e.dispose()
+    shutil.rmtree(tmp, ignore_errors=True)
+    check.done("MIGRATION")
+
+
+if __name__ == "__main__":
+    run()

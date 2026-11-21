@@ -56,7 +56,8 @@ def build_analytics(jobs: Iterable[Any], days: int = 30, today: datetime.date | 
     ]
 
     top_companies = Counter(j.company for j in jobs if j.company).most_common(5)
-    sources = Counter((j.source or "Unknown") for j in jobs)
+    # V1 stored "JSearch"; V2 sources use lower-case ids ("jsearch", "adzuna", ...): group case-insensitively.
+    sources = Counter((j.source or "unknown").strip().lower() for j in jobs)
 
     applied_or_later = sum(c for s, c in status_counts.items() if s not in ("To Apply",))
     interviews = status_counts.get("Interview", 0) + status_counts.get("Offer", 0)
