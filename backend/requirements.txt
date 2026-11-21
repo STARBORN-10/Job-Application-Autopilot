@@ -11,3 +11,6 @@ psycopg2-binary==2.9.10
 google-genai==3.3.0
 alembic==1.20.1
 Mako==1.4.3
+openpyxl==3.1.5
+reportlab==5.1.0
+python-docx==1.2.0

@@ -54,6 +54,13 @@ class Cooldown:
             self._last = now
             return 0.0
 
+    def remaining(self) -> float:
+        """Seconds until the next action is allowed (0 when allowed now). Does not start a window."""
+        with self._lock:
+            if self._last is None:
+                return 0.0
+            return max(0.0, self.seconds() - (time.monotonic() - self._last))
+
     def reset(self) -> None:
         with self._lock:
             self._last = None

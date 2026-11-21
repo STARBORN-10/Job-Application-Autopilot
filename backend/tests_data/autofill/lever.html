@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- Local test fixture imitating a Lever "/apply" page (structure only), including an hCaptcha widget. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture Co - Backend Developer</title></head>
+<body>
+<form id="application-form" method="POST" action="/submit/lever" enctype="multipart/form-data">
+  <ul>
+    <li class="application-question resume">
+      <div class="application-label">Resume/CV<span class="required">✱</span></div>
+      <div class="application-field"><input type="file" name="resume" id="resume-upload-input" required></div>
+    </li>
+    <li class="application-question">
+      <div class="application-label">Full name<span class="required">✱</span></div>
+      <div class="application-field"><input type="text" name="name" required></div>
+    </li>
+    <li class="application-question">
+      <div class="application-label">Email<span class="required">✱</span></div>
+      <div class="application-field"><input type="email" name="email" required></div>
+    </li>
+    <li class="application-question">
+      <div class="application-label">Phone</div>
+      <div class="application-field"><input type="text" name="phone"></div>
+    </li>
+    <li class="application-question">
+      <div class="application-label">Current company</div>
+      <div class="application-field"><input type="text" name="org"></div>
+    </li>
+    <li class="application-question"><div class="application-label">LinkedIn URL</div>
+      <div class="application-field"><input type="text" name="urls[LinkedIn]"></div></li>
+    <li class="application-question"><div class="application-label">GitHub URL</div>
+      <div class="application-field"><input type="text" name="urls[GitHub]"></div></li>
+    <li class="application-question"><div class="application-label">Portfolio URL</div>
+      <div class="application-field"><input type="text" name="urls[Portfolio]"></div></li>
+    <li class="application-question">
+      <div class="application-label">What is your expected CTC?<span class="required">✱</span></div>
+      <div class="application-field"><input type="text" name="cards[abc][field0]" required></div>
+    </li>
+    <li class="application-question">
+      <div class="application-label">Additional information</div>
+      <div class="application-field">
+        <textarea name="comments" placeholder="Add a cover letter or anything else you want to share."></textarea>
+      </div>
+    </li>
+  </ul>
+  <div class="h-captcha" data-sitekey="00000000-0000-0000-0000-000000000000"></div>
+  <button type="submit" class="template-btn-submit">Submit application</button>
+</form>
+</body>
+</html>

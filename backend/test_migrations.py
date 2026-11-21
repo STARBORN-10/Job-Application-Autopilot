@@ -18,6 +18,7 @@ from testing_utils import Checker, use_temp_database
 use_temp_database()
 
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker
 
 import db_migrations
 import models
@@ -38,6 +39,7 @@ V1_DDL = [
     "CREATE INDEX ix_app_settings_key ON app_settings (key)",
 ]
 
+HEAD = "0003_tailored_resumes"
 BACKUP = Path(os.getenv("V1_BACKUP_DB", r"C:\WINDOWS\TEMP\v2_samples\jobs.db.pre-v2.bak"))
 
 
@@ -54,7 +56,7 @@ def run():
     db_migrations.upgrade_database(fresh)
     tables = set(inspect(fresh).get_table_names())
     check(set(models.Base.metadata.tables) <= tables, "All model tables exist after upgrade head")
-    check(db_migrations.current_revision(fresh) == "0002_v2_schema", "Revision is head (0002_v2_schema)")
+    check(db_migrations.current_revision(fresh) == HEAD, f"Revision is head ({HEAD})")
     for name, table in models.Base.metadata.tables.items():
         check(_columns(fresh, name) == {c.name for c in table.columns}, f"Migrated '{name}' columns match models.py")
 
@@ -112,6 +114,56 @@ def run():
         eng.dispose()
     else:
         print("  (skipped: no backup database found)")
+
+    check.section("6. Existing V2 database (0002) with data -> tailored_resumes added, rows kept")
+    from alembic import command
+    v2 = create_engine(f"sqlite:///{tmp / 'v2.db'}")
+    cfg = db_migrations._config()
+    with v2.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "0002_v2_schema")
+    with v2.begin() as conn:
+        conn.exec_driver_sql("INSERT INTO jobs (title, company, url, score, status, approval_status, source_names) VALUES "
+                             "('ML Engineer', 'Acme', 'https://x/1', 8.2, 'To Apply', 'approved', '[\"adzuna\", \"jooble\"]')")
+        conn.exec_driver_sql("INSERT INTO applications (job_id, method, status, dry_run) VALUES (1, 'email', 'dry_run', 1)")
+    check(db_migrations.current_revision(v2) == "0002_v2_schema" and "tailored_resumes" not in inspect(v2).get_table_names(),
+          "Starting point is a V2 database without tailored_resumes")
+    db_migrations.upgrade_database(v2)
+    with v2.connect() as conn:
+        job_row = conn.execute(text("SELECT title, score, approval_status, source_names FROM jobs")).fetchone()
+        apps = conn.execute(text("SELECT count(*) FROM applications")).scalar()
+    check(db_migrations.current_revision(v2) == HEAD, "V2 database upgraded to head")
+    check(job_row[0] == "ML Engineer" and job_row[1] == 8.2 and job_row[2] == "approved" and "jooble" in job_row[3],
+          "Existing V2 job (score, decision, merged sources) kept")
+    check(apps == 1, "Existing application rows kept")
+    check(_columns(v2, "tailored_resumes") == {c.name for c in models.TailoredResume.__table__.columns},
+          "tailored_resumes columns match models.py")
+    db_migrations.upgrade_database(v2)
+    check(db_migrations.current_revision(v2) == HEAD, "Re-running the V3 migration is a no-op")
+    session = sessionmaker(bind=v2)()
+    session.add(models.TailoredResume(job_id=1, resume_id=1, resume_hash="h", status="not_needed", score_before=9.1))
+    session.commit()
+    check(session.query(models.TailoredResume).count() == 1, "ORM writes to the new table")
+    session.close()
+    v2.dispose()
+
+    check.section("7. Copy of a real V2 database (optional, V2_DB_COPY)")
+    real_copy = os.getenv("V2_DB_COPY")
+    if real_copy and Path(real_copy).exists():
+        copy = tmp / "real_v2_copy.db"
+        shutil.copyfile(real_copy, copy)
+        eng = create_engine(f"sqlite:///{copy}")
+        tables = ("jobs", "resumes", "app_settings", "applications", "job_decisions")
+        with eng.connect() as conn:
+            before = {t: conn.execute(text(f"SELECT count(*) FROM {t}")).scalar() for t in tables}
+        db_migrations.upgrade_database(eng)
+        with eng.connect() as conn:
+            after = {t: conn.execute(text(f"SELECT count(*) FROM {t}")).scalar() for t in tables}
+        check(before == after and db_migrations.current_revision(eng) == HEAD,
+              f"Real V2 copy upgraded to head with row counts unchanged ({after})")
+        eng.dispose()
+    else:
+        print("  (skipped: set V2_DB_COPY to a COPY of a V2 database to run this check)")
 
     for e in (fresh, v1):
         e.dispose()

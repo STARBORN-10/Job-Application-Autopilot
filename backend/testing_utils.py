@@ -32,6 +32,12 @@ def use_temp_database() -> str:
     for name in OFFLINE_BLANK_VARS:
         os.environ[name] = ""
     os.environ["APPLY_DRY_RUN"] = "true"
+    # Never open a real career page from a test: no form pre-fill on approve, never submit, and keep
+    # generated files (tailored resumes, screenshots) out of the repository.
+    os.environ["AUTOFILL_ON_APPROVE"] = "false"
+    os.environ["AUTOFILL_SUBMIT"] = "false"
+    os.environ["AUTOFILL_HEADLESS"] = "true"
+    os.environ["GENERATED_DIR"] = tempfile.mkdtemp(prefix="autopilot_generated_")
     return handle.name
 
 

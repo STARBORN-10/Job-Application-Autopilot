@@ -1,4 +1,5 @@
 import os
+import datetime
 import hmac
 import json
 import re
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -28,6 +30,11 @@ from security import require_admin, trigger_cooldown
 from services.pipeline import run_automation_pipeline, get_pipeline_status
 from services import ai_service, analytics as analytics_service, llm, telegram_bot
 from services import notification_service
+from services import export as export_service, resume_tailor
+from services.autofill import policy as autofill_policy, runner as autofill_runner, service as autofill_service
+from services.autofill.profile import ApplicantProfile, get_profile as get_applicant_profile, save_profile as save_applicant_profile
+from services.progress import progress as pipeline_progress
+from services.tasks import tasks as task_registry
 from services.decisions import record_decision
 from services.apply import emailer as apply_emailer, service as apply_service
 from services.retry import retry_call
@@ -124,22 +131,34 @@ app = FastAPI(title="Job Application Autopilot API", lifespan=lifespan)
 # ---------------------------------------------------------------------------
 # CORS
 # ---------------------------------------------------------------------------
-cors_env = os.getenv("CORS_ORIGINS", "").strip()
-allowed_origins = [o.strip() for o in cors_env.split(",") if o.strip()] if cors_env else ["*"]
+# CORS_ORIGINS: comma-separated list (unset = allow every origin). FRONTEND_URL (the deployed dashboard)
+# is always added. Local development origins (http://localhost:<any port>, http://127.0.0.1:<any port>)
+# are always allowed, so a Vite dev server on 5173 or any other port works against a restricted backend.
+def cors_settings() -> dict:
+    cors_env = os.getenv("CORS_ORIGINS", "").strip()
+    origins = [o.strip().rstrip("/") for o in cors_env.split(",") if o.strip()] if cors_env else ["*"]
+    frontend = (os.getenv("FRONTEND_URL") or "").strip().rstrip("/")
+    if frontend and "*" not in origins and frontend not in origins:
+        origins.append(frontend)
+    return {"allow_origins": origins, "allow_origin_regex": r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"}
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    **cors_settings(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "Retry-After"],
 )
 
 # Serve uploaded PDFs (for preview / download)
 app.mount("/uploads", StaticFiles(directory=str(Path(__file__).parent / "uploads")), name="uploads")
 
 # ---------------------------------------------------------------------------
-# Auth helper (used by Make.com endpoints)
+# Auth helper for the legacy ingestion endpoints (POST /api/jobs, /api/make/*).
+# DEPRECATED: these served the old Make.com scenario, which the native pipeline replaced. They are kept
+# (with MAKE_API_KEY) only so existing external integrations and tests keep working.
 # ---------------------------------------------------------------------------
 def verify_api_key(x_api_key: str | None = Header(default=None)):
     expected_key = os.getenv("MAKE_API_KEY")
@@ -267,9 +286,19 @@ def read_jobs(
     skip: int = 0,
     limit: int = 100,
     approval_status: Optional[str] = Query(None, pattern="^(pending|approved|skipped)$"),
+    sort: str = Query("newest", pattern="^(newest|score)$"),
     db: Session = Depends(get_db),
 ):
-    return crud.get_jobs(db, skip=skip, limit=limit, approval_status=approval_status)
+    """Jobs, newest first (default) or best score first (`sort=score`; ties: newest first). The ordering is
+    done by the database before the limit, so a limit never hides a higher-scoring older job."""
+    return crud.get_jobs(db, skip=skip, limit=limit, approval_status=approval_status, sort=sort)
+
+
+@app.get("/api/jobs/top", response_model=List[schemas.JobResponse])
+def top_jobs(limit: int = Query(5, ge=1, le=100), min_score: Optional[float] = Query(None, ge=0, le=10),
+             db: Session = Depends(get_db)):
+    """Best matches: highest score first (ties: newest first), excluding skipped and rejected jobs."""
+    return crud.get_top_jobs(db, limit=limit, min_score=min_score)
 
 @app.get("/api/jobs/{job_id}", response_model=schemas.JobResponse)
 def read_job(job_id: int, db: Session = Depends(get_db)):
@@ -278,7 +307,7 @@ def read_job(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
     return db_job
 
-@app.post("/api/jobs", response_model=schemas.JobResponse, dependencies=[Depends(verify_api_key)])
+@app.post("/api/jobs", response_model=schemas.JobResponse, dependencies=[Depends(verify_api_key)], deprecated=True)
 def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
     # 1. Duplicate job detection (URL primary match, Title+Company fallback)
     duplicate = crud.find_duplicate_job(db, job)
@@ -321,20 +350,43 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
 # ===========================================================================
 
 @app.get("/api/analytics")
-def get_analytics(days: int = Query(30, ge=7, le=365), db: Session = Depends(get_db)):
-    """Aggregated statistics for the analytics dashboard (computed on demand)."""
-    return analytics_service.build_analytics(crud.get_jobs(db, skip=0, limit=100000), days=days)
+def get_analytics(days: int = Query(30, ge=7, le=365), source: Optional[str] = Query(None, max_length=40),
+                  db: Session = Depends(get_db)):
+    """Aggregated statistics for the analytics dashboard (computed on demand). `source` limits it to jobs
+    found on that source (primary or merged)."""
+    jobs = crud.get_jobs(db, skip=0, limit=100000)
+    if source:
+        jobs = export_service.filter_jobs(jobs, source=source)
+    data = analytics_service.build_analytics(jobs, days=days)
+    data["source_filter"] = source
+    return data
 
 
-@app.get("/api/export/jobs.csv")
-def export_jobs_csv(db: Session = Depends(get_db)):
-    """Download all jobs as CSV (native replacement for the old Make.com -> Google Sheets log)."""
-    csv_text = analytics_service.jobs_to_csv(crud.get_jobs(db, skip=0, limit=100000))
-    return Response(
-        content=csv_text,
-        media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="jobs.csv"'},
-    )
+@app.get("/api/export/jobs.{fmt}")
+def export_jobs(
+    fmt: str,
+    status: Optional[str] = Query(None, max_length=40),
+    min_score: Optional[float] = Query(None, ge=0, le=10),
+    source: Optional[str] = Query(None, max_length=40),
+    approval_status: Optional[str] = Query(None, pattern="^(pending|approved|skipped)$"),
+    db: Session = Depends(get_db),
+):
+    """Download jobs as CSV, Excel (.xlsx) or PDF, optionally filtered like the Job Listings page."""
+    if fmt not in export_service.FORMATS:
+        raise HTTPException(status_code=404, detail="Unknown export format. Use jobs.csv, jobs.xlsx or jobs.pdf.")
+    jobs = export_service.filter_jobs(crud.get_jobs(db, skip=0, limit=100000), status=status, min_score=min_score,
+                                      source=source, approval_status=approval_status)
+    filters = ", ".join(f"{k}={v}" for k, v in (("status", status), ("min score", min_score), ("source", source),
+                                                ("decision", approval_status)) if v not in (None, ""))
+    try:
+        content = export_service.render(fmt, jobs, filters)
+    except ImportError as exc:
+        raise HTTPException(status_code=501, detail=f"Export to {fmt} needs a missing package ({exc.name}). "
+                                                    "Run: pip install -r requirements.txt")
+    media_type, ext = export_service.FORMATS[fmt]
+    stamp = datetime.date.today().isoformat()
+    return Response(content=content, media_type=media_type,
+                    headers={"Content-Disposition": f'attachment; filename="jobs-{stamp}.{ext}"'})
 
 
 @app.post("/api/jobs/{job_id}/analyze")
@@ -544,13 +596,18 @@ def get_resume_text(resume_id: int, db: Session = Depends(get_db)):
 
 
 # ===========================================================================
-# Make.com secure endpoints
+# Legacy ingestion endpoints (DEPRECATED)
+# ---------------------------------------------------------------------------
+# These served the old Make.com scenario, which the built-in Python pipeline replaced. They are kept,
+# protected by MAKE_API_KEY (X-API-Key header), so existing deployments, external scripts and the test
+# suites keep working. The dashboard no longer uses them. Do not build new features on them.
 # ===========================================================================
 
 @app.get(
     "/api/make/context",
     response_model=schemas.MakeContextResponse,
     dependencies=[Depends(verify_api_key)],
+    deprecated=True,
 )
 def make_get_context(db: Session = Depends(get_db)):
     """
@@ -578,6 +635,7 @@ def make_get_context(db: Session = Depends(get_db)):
     "/api/make/resume",
     response_model=schemas.ResumeDetailResponse,
     dependencies=[Depends(verify_api_key)],
+    deprecated=True,
 )
 def make_get_resume(
     role: str = Query(..., description="Target role to look up, e.g. 'AI/ML Engineer'"),
@@ -656,27 +714,48 @@ def trigger_automation(background_tasks: BackgroundTasks):
         )
     wait = trigger_cooldown.try_acquire()
     if wait > 0:
+        seconds = int(wait) + 1
         raise HTTPException(
             status_code=429,
-            detail=f"A run was started recently. Please wait {int(wait) + 1} more second(s) before starting another.",
+            detail=f"A run was started recently. Please wait {seconds} more second(s) before starting another.",
+            headers={"Retry-After": str(seconds)},
         )
-    # Start the pipeline as a background task. The pipeline will manage its own DB session if needed.
-    background_tasks.add_task(run_automation_pipeline)
+    # Mark the run as starting right away, so a status poll made immediately after this response already
+    # shows it (the background task may take a moment to begin).
+    run_id = pipeline_progress.begin()
+    background_tasks.add_task(_run_pipeline_from_trigger)
     return schemas.AutomationTriggerResponse(
         status="started",
         message="Automation pipeline started.",
-        details={},
+        details={"run_id": run_id, "cooldown_seconds": int(trigger_cooldown.seconds())},
     )
+
+
+def _run_pipeline_from_trigger() -> None:
+    try:
+        run_automation_pipeline(progress_begun=True)
+    finally:
+        # Never leave the progress panel spinning if the run did not report its end.
+        from services import pipeline as _pipeline
+        if pipeline_progress.is_active() and not _pipeline._pipeline_lock.locked():
+            pipeline_progress.finish(False, "The run ended unexpectedly.", error="The run ended unexpectedly.")
 
 
 @app.get("/api/automation/status")
 def automation_status(db: Session = Depends(get_db)):
-    """Whether the pipeline is running, the last finished run (survives restarts) and per-source health."""
+    """
+    Whether the pipeline is running, live progress of the current run (stage, per-source state,
+    counters, ids of jobs saved so far), the last finished run (survives restarts), per-source health
+    and the seconds left before another manual start is allowed.
+    """
     try:
-        return get_pipeline_status(db)
+        status = get_pipeline_status(db)
     except Exception as exc:
         logger.warning(f"Status with database details failed ({type(exc).__name__}); returning in-memory status")
-        return get_pipeline_status()
+        status = get_pipeline_status()
+    status["cooldown_remaining"] = round(trigger_cooldown.remaining(), 1)
+    status["cooldown_seconds"] = trigger_cooldown.seconds()
+    return status
 
 
 # ===========================================================================
@@ -687,6 +766,26 @@ def automation_status(db: Session = Depends(get_db)):
 def list_sources(db: Session = Depends(get_db)):
     """Every job source with enabled/configured/experimental flags and its last health record."""
     return source_registry.describe_sources(db)
+
+
+@app.get("/api/sources/summary")
+def sources_summary(db: Session = Depends(get_db)):
+    """
+    Every source the user can filter by: the registered sources plus any other source name found in the
+    stored jobs (e.g. V1's "JSearch" or the legacy ingestion API), with job counts. `jobs` counts jobs whose
+    own source is this one; `seen` also counts jobs merged from several sources that list it.
+    """
+    counts = crud.source_counts(db)
+    out = []
+    registered = {s["name"]: s for s in source_registry.describe_sources(db)}
+    for name, s in registered.items():
+        c = counts.pop(name, {"primary": 0, "seen": 0})
+        out.append({"name": name, "label": s["label"], "registered": True, "enabled": s["enabled"],
+                    "configured": s["configured"], "jobs": c["primary"], "seen": c["seen"]})
+    for name, c in sorted(counts.items()):
+        out.append({"name": name, "label": name, "registered": False, "enabled": None, "configured": None,
+                    "jobs": c["primary"], "seen": c["seen"]})
+    return out
 
 
 @app.put("/api/sources/{name}")
@@ -739,14 +838,54 @@ def tune_scoring_weights(apply: bool = Query(False), db: Session = Depends(get_d
     return scoring_tuning.tune(db, apply=apply)
 
 
-def _on_approved(db: Session, job: models.Job) -> Optional[models.Application]:
-    """After an approval (Telegram or dashboard): apply with the safest method. Never breaks the approval."""
+def _after_approval(db: Session, job: models.Job) -> dict:
+    """
+    Everything that follows an approval, in order, never breaking the approval itself:
+    1. tailored resume (AUTO_TAILOR_ON_APPROVE, default on; skipped when the score is already >= the threshold),
+    2. apply with the safest method (e-mail, dry run by default, or assisted),
+    3. for Greenhouse / Lever / Ashby pages, start pre-filling the form in the background (AUTOFILL_ON_APPROVE,
+       needs Playwright; never submits unless explicitly allowed).
+    """
+    result = {"application": None, "tailored_resume": None, "tailor_error": None, "autofill_task": None,
+              "autofill_note": None}
+    if resume_tailor.auto_tailor_on_approve():
+        try:
+            result["tailored_resume"] = resume_tailor.to_dict(resume_tailor.tailor_for_job(db, job))
+        except resume_tailor.TailorError as exc:
+            result["tailor_error"] = str(exc)
+        except Exception as exc:
+            logger.exception(f"Tailoring the resume for job {job.id} failed")
+            db.rollback()
+            result["tailor_error"] = f"Tailoring failed ({type(exc).__name__}); the original resume is used."
     try:
-        return apply_service.apply_for_job(db, job)
+        result["application"] = apply_service.apply_for_job(db, job)
     except Exception:
         logger.exception(f"Applying for job {job.id} failed")
         db.rollback()
-        return None
+    app_row = result["application"]
+    if app_row is not None and app_row.method == "assisted" and autofill_service.supported_ats(job.url):
+        if not autofill_policy.on_approve():
+            result["autofill_note"] = "Form pre-fill on approve is off; use 'Pre-fill application form'."
+        elif not autofill_runner.playwright_available():
+            result["autofill_note"] = autofill_runner.INSTALL_HINT
+        else:
+            try:
+                result["autofill_task"] = autofill_service.start_prefill(job.id)
+            except autofill_service.AutofillUnavailable as exc:
+                result["autofill_note"] = str(exc)
+            except Exception:
+                logger.exception(f"Starting the form pre-fill for job {job.id} failed")
+                result["autofill_note"] = "Could not start the form pre-fill."
+    return result
+
+
+def _on_approved(db: Session, job: models.Job) -> Optional[models.Application]:
+    """After an approval from Telegram: same steps as the dashboard. Returns the application row."""
+    return _after_approval(db, job)["application"]
+
+
+def _screenshot_url(app_row: models.Application, payload: dict) -> Optional[str]:
+    return f"/api/applications/{app_row.id}/screenshot" if payload.get("screenshot") else None
 
 
 def _application_out(app_row: Optional[models.Application], job: Optional[models.Job] = None) -> Optional[dict]:
@@ -756,15 +895,21 @@ def _application_out(app_row: Optional[models.Application], job: Optional[models
         payload = json.loads(app_row.payload_summary) if app_row.payload_summary else {}
     except ValueError:
         payload = {}
+    # Never expose server file-system paths; the screenshot is served by its own endpoint.
+    public = {k: v for k, v in payload.items() if k not in ("screenshot", "screenshot_after_submit")}
     out = {
         "id": app_row.id, "job_id": app_row.job_id, "method": app_row.method, "status": app_row.status,
-        "dry_run": bool(app_row.dry_run), "payload_summary": payload, "error": app_row.error,
+        "dry_run": bool(app_row.dry_run), "payload_summary": public, "error": app_row.error,
+        "outcome": apply_service.describe(app_row, payload),
+        "resume_kind": payload.get("resume_kind"),
+        "resume_file": payload.get("resume_file") or payload.get("attachment"),
+        "screenshot_url": _screenshot_url(app_row, payload),
         "created_at": app_row.created_at.isoformat() if app_row.created_at else None,
         "updated_at": app_row.updated_at.isoformat() if app_row.updated_at else None,
     }
     if job is not None:
-        out.update(job_title=job.title, job_company=job.company, job_url=job.url,
-                   cover_letter=job.cover_letter if app_row.method == "assisted" else None)
+        out.update(job_title=job.title, job_company=job.company, job_url=job.url, job_source=job.source,
+                   cover_letter=job.cover_letter if app_row.method in ("assisted", "autofill", "email") else None)
     return out
 
 
@@ -773,9 +918,164 @@ def _decide(job_id: int, decision: str, db: Session) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     outcome = record_decision(db, job, decision, channel="dashboard")
-    application = _on_approved(db, job) if outcome.changed and decision == "approved" else None
+    extra = _after_approval(db, job) if outcome.changed and decision == "approved" else {}
+    application = extra.get("application")
+    db.refresh(job)
+    app_out = _application_out(application, job)
+    if decision == "approved":
+        if not outcome.changed:
+            message = "This job was already approved; nothing was repeated."
+        elif app_out:
+            message = app_out["outcome"]
+        else:
+            message = "Approved, but the apply step could not run (see the server log)."
+    else:
+        message = ("Skipped: the job is hidden from your top matches and counted as 'not interested' for score "
+                   "tuning. Nothing was sent." if outcome.changed else "This job was already skipped.")
     return {"job": schemas.JobResponse.model_validate(job).model_dump(mode="json"), "changed": outcome.changed,
-            "application": _application_out(application, job)}
+            "application": app_out, "message": message,
+            "tailored_resume": extra.get("tailored_resume"), "tailor_error": extra.get("tailor_error"),
+            "autofill_task": extra.get("autofill_task"), "autofill_note": extra.get("autofill_note")}
+
+
+def _job_or_404(db: Session, job_id: int) -> models.Job:
+    job = crud.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.get("/api/jobs/{job_id}/approve-preview")
+def approve_preview(job_id: int, db: Session = Depends(get_db)):
+    """Exactly what Approve will do for this job with the current configuration. Changes nothing."""
+    return apply_service.preview(db, _job_or_404(db, job_id))
+
+
+@app.get("/api/jobs/{job_id}/timeline")
+def job_timeline(job_id: int, db: Session = Depends(get_db)):
+    """Decisions, application attempts, tailored resumes and running tasks for one job, oldest first."""
+    job = _job_or_404(db, job_id)
+    events = []
+    events.append({"at": job.date_found.isoformat() if job.date_found else None, "kind": "found",
+                   "text": f"Found on {job.source or 'unknown source'}"})
+    for d in db.query(models.JobDecision).filter(models.JobDecision.job_id == job_id).all():
+        events.append({"at": d.decided_at.isoformat() if d.decided_at else None, "kind": f"decision_{d.decision}",
+                       "text": f"{d.decision.capitalize()} ({d.channel or 'dashboard'})"})
+    tailored = db.query(models.TailoredResume).filter(models.TailoredResume.job_id == job_id).all()
+    for t in tailored:
+        info = resume_tailor.to_dict(t)
+        events.append({"at": info["created_at"], "kind": f"tailor_{t.status}", "text": info.get("message") or t.status})
+    apps = db.query(models.Application).filter(models.Application.job_id == job_id).order_by(models.Application.id).all()
+    for a in apps:
+        events.append({"at": a.created_at.isoformat() if a.created_at else None, "kind": f"application_{a.method}",
+                       "status": a.status, "text": apply_service.describe(a)})
+    events.sort(key=lambda e: e["at"] or "")
+    return {"events": events, "applications": [_application_out(a, job) for a in reversed(apps)],
+            "tasks": task_registry.for_job(job_id)}
+
+
+@app.post("/api/jobs/{job_id}/tailor-resume", dependencies=[Depends(require_admin)])
+def tailor_resume(job_id: int, regenerate: bool = Query(False), db: Session = Depends(get_db)):
+    """
+    Create (or return the cached) tailored resume for this job. If the score is already at or above
+    TAILOR_SCORE_THRESHOLD (default 9.0) the original resume is kept. `regenerate=true` forces a new version.
+    """
+    job = _job_or_404(db, job_id)
+    try:
+        row = resume_tailor.tailor_for_job(db, job, regenerate=regenerate)
+    except resume_tailor.TailorError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return resume_tailor.to_dict(row, job)
+
+
+@app.get("/api/jobs/{job_id}/tailored-resume")
+def get_tailored_resume(job_id: int, db: Session = Depends(get_db)):
+    """The latest tailored resume for this job and the active resume (404 when none was made yet)."""
+    job = _job_or_404(db, job_id)
+    resume = crud.get_active_resume_for_role(db, crud.get_general_settings(db).active_role)
+    row = resume_tailor.latest(db, job.id, resume) if resume is not None else None
+    if row is None:
+        row = resume_tailor.latest(db, job.id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="No tailored resume for this job yet.")
+    data = resume_tailor.to_dict(row, job)
+    data["outdated"] = resume is None or row.resume_id != resume.id
+    return data
+
+
+@app.get("/api/jobs/{job_id}/tailored-resume.{kind}")
+def download_tailored_resume(job_id: int, kind: str, db: Session = Depends(get_db)):
+    if kind not in ("pdf", "docx"):
+        raise HTTPException(status_code=404, detail="Use .pdf or .docx")
+    job = _job_or_404(db, job_id)
+    row = resume_tailor.latest(db, job.id)
+    if row is None or row.status != "tailored":
+        raise HTTPException(status_code=404, detail="No tailored resume file for this job (the original is used).")
+    try:
+        path = resume_tailor.file_for(row, kind)
+        db.commit()
+    except ImportError as exc:
+        raise HTTPException(status_code=501, detail=f"Rendering needs a missing package ({exc.name}).")
+    if path is None:
+        raise HTTPException(status_code=500, detail="The file could not be rendered.")
+    safe_company = re.sub(r"[^A-Za-z0-9]+", "_", job.company or "company").strip("_")[:40] or "company"
+    media = ("application/pdf" if kind == "pdf"
+             else "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    return FileResponse(str(path), media_type=media, filename=f"resume_{safe_company}_{job.id}.{kind}")
+
+
+@app.post("/api/jobs/{job_id}/prefill", dependencies=[Depends(require_admin)])
+def prefill_application(job_id: int, db: Session = Depends(get_db)):
+    """Fill the Greenhouse / Lever / Ashby application form in the background (stops before submit by default)."""
+    _job_or_404(db, job_id)
+    try:
+        return autofill_service.start_prefill(job_id)
+    except autofill_service.AutofillUnavailable as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.get("/api/tasks/{task_id}")
+def get_task(task_id: str):
+    task = task_registry.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found (the server may have restarted).")
+    return task
+
+
+@app.get("/api/applications/{application_id}/screenshot")
+def application_screenshot(application_id: int, after_submit: bool = False, db: Session = Depends(get_db)):
+    row = db.get(models.Application, application_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    try:
+        payload = json.loads(row.payload_summary or "{}")
+    except ValueError:
+        payload = {}
+    raw = payload.get("screenshot_after_submit" if after_submit else "screenshot")
+    base = autofill_service.screenshot_dir().resolve()
+    path = Path(raw).resolve() if raw else None
+    if path is None or not path.is_file() or base not in path.parents:
+        raise HTTPException(status_code=404, detail="Screenshot not available.")
+    return FileResponse(str(path), media_type="image/png")
+
+
+@app.get("/api/settings/applicant-profile", response_model=ApplicantProfile)
+def read_applicant_profile(db: Session = Depends(get_db)):
+    """Contact details used to fill application forms (never visa, salary or EEO answers)."""
+    return get_applicant_profile(db)
+
+
+@app.put("/api/settings/applicant-profile", response_model=ApplicantProfile)
+def update_applicant_profile(payload: ApplicantProfile, db: Session = Depends(get_db)):
+    return save_applicant_profile(db, payload)
+
+
+@app.get("/api/autofill/config")
+def autofill_config(db: Session = Depends(get_db)):
+    """Form-filling settings and whether Playwright is installed (for the Settings page)."""
+    return {**autofill_policy.describe(), "playwright_installed": autofill_runner.playwright_available(),
+            "install_hint": autofill_runner.INSTALL_HINT, "profile_missing": get_applicant_profile(db).missing_basics(),
+            "tailor_threshold": resume_tailor.threshold(), "auto_tailor_on_approve": resume_tailor.auto_tailor_on_approve()}
 
 
 @app.post("/api/jobs/{job_id}/apply", dependencies=[Depends(require_admin)])

@@ -12,6 +12,10 @@ One run:
    AI fact extraction, a re-score and (if they pass the minimum score) an AI cover letter
 8. Save with the score breakdown, then (strictly after the commit) a Telegram alert
 9. The run summary is kept in memory and persisted to app_settings, so it survives restarts
+
+Live progress (stage, per-source state, counters, jobs saved so far) is reported through
+services/progress.py and returned by get_pipeline_status() under "progress". Every saved job is
+committed immediately (crud.create_job), so it is visible to the dashboard while the run continues.
 """
 
 import os
@@ -26,6 +30,7 @@ import crud
 import schemas
 from database import SessionLocal
 from services import dedupe, geo, jsearch_service, llm, notification_service
+from services.progress import plain_source_error, progress
 from services.retry import retry_call
 from services.scoring import facts as facts_mod, profile as profile_mod, weights as weights_mod
 from services.scoring.engine import score_job
@@ -138,8 +143,48 @@ def _new_summary() -> Dict[str, Any]:
         "notified": 0,
         "failed": 0,
         "sources": {},
+        "per_source": {},          # {source: {fetched, merged_away, duplicates, filtered, below_threshold, saved, failed}}
+        "errors": [],              # plain-language problems worth showing
+        "headline": "",            # one-line result for the UI toast
         "details": [],
     }
+
+
+SHORT_LABELS = {"jsearch": "JSearch", "adzuna": "Adzuna", "jooble": "Jooble", "ats": "Career boards",
+                "internshala": "Internshala", "jobspy": "Indeed/LinkedIn"}
+
+
+def _per_source(summary: Dict[str, Any], name: Optional[str]) -> Dict[str, int]:
+    key = (name or "unknown").lower()
+    return summary["per_source"].setdefault(key, {"fetched": 0, "merged_away": 0, "duplicates": 0, "filtered": 0,
+                                                   "below_threshold": 0, "saved": 0, "failed": 0})
+
+
+def source_label(name: str) -> str:
+    source = registry.get_source(name)
+    return SHORT_LABELS.get(name) or (source.label if source else name)
+
+
+def build_headline(summary: Dict[str, Any]) -> str:
+    """'Found 7 new jobs: Adzuna 4, Jooble 2, JSearch 1.' or why nothing new was saved."""
+    saved = summary.get("saved", 0)
+    per = summary.get("per_source") or {}
+    if saved:
+        parts = [f"{source_label(n)} {v['saved']}" for n, v in sorted(per.items(), key=lambda kv: -kv[1]["saved"])
+                 if v.get("saved")]
+        return f"Found {saved} new job{'s' if saved != 1 else ''}: " + ", ".join(parts) + "."
+    reasons = []
+    if summary.get("duplicates_skipped"):
+        reasons.append(f"{summary['duplicates_skipped']} duplicates skipped (already in your list)")
+    below = sum(v.get("below_threshold", 0) for v in per.values())
+    if below:
+        reasons.append(f"{below} below your minimum score")
+    filtered = summary.get("experience_filtered", 0) + sum((summary.get("filtered") or {}).values())
+    if filtered:
+        reasons.append(f"{filtered} removed by your filters")
+    if not summary.get("total_fetched"):
+        reasons.append("the sources returned no jobs")
+    return "No new jobs" + ("; " + ", ".join(reasons) if reasons else "") + "."
 
 
 def llm_jobs_per_run() -> int:
@@ -170,14 +215,20 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
     active_resume = crud.get_active_resume_for_role(db, active_role)
     if not active_resume or not active_resume.extracted_text or not active_resume.extracted_text.strip():
         summary["status"] = "error"
-        summary["message"] = f"No active resume with extracted text found for role '{active_role}'. Please upload a resume first."
+        summary["message"] = (f"No active resume with extracted text found for role '{active_role}'. "
+                              "Please upload a resume first (Resumes page).")
         logger.warning(summary["message"])
         return
     resume_text = active_resume.extracted_text.strip()
 
     # --- Discovery: every enabled source, isolated from the others
-    fetched = run_sources(db, build_query(settings), http_client=http_client, only=only_sources)
+    progress.stage("fetching", f"Searching for '{active_role}' jobs...")
+    fetched = run_sources(db, build_query(settings), http_client=http_client, only=only_sources,
+                          on_progress=progress.source)
     summary["sources"] = fetched.report
+    for name, entry in fetched.report.items():
+        if entry["status"] in ("error", "not_configured", "skipped") and entry.get("error"):
+            summary["errors"].append(f"{source_label(name)}: {plain_source_error(entry['error'])}")
     if not fetched.ran:
         summary["status"] = "error"
         summary["message"] = "No job source is enabled and configured. Check Settings > Job sources."
@@ -188,13 +239,20 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
         summary["message"] = f"Job discovery failed: {errors}"
         logger.error(summary["message"])
         return
+    for job in fetched.jobs:
+        _per_source(summary, job.source)["fetched"] += 1
 
+    progress.stage("deduplicating", f"Merging duplicates among {len(fetched.jobs)} jobs...")
     merges: list = []
     jobs, merged = dedupe.dedupe_jobs(fetched.jobs, merges)
     summary["merges"] = merges[:MAX_MERGE_RECORDS]
     summary["total_fetched"] = len(fetched.jobs)
     summary["unique_jobs"] = len(jobs)
     summary["merged_duplicates"] = merged
+    kept = Counter((j.source or "unknown").lower() for j in jobs)
+    for name, stats in summary["per_source"].items():
+        stats["merged_away"] = max(0, stats["fetched"] - kept.get(name, 0))
+    progress.counts(fetched=len(fetched.jobs), unique=len(jobs))
     logger.info(f"Pipeline fetched {len(fetched.jobs)} jobs ({len(jobs)} unique) for role '{active_role}'.")
 
     profile = profile_mod.get_profile(db, active_resume, active_role, settings.target_roles)
@@ -203,13 +261,17 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
     filtered = Counter()
 
     # --- Pass 1 (no AI): database duplicates, hard filters, keyword pre-score
+    progress.stage("filtering", f"Checking {len(jobs)} jobs against your list and filters...")
+    progress.counts(processed=0, total=len(jobs))
     candidates = []
     for job in jobs:
+        progress.processed()
         try:
             duplicate = crud.find_duplicate_job(db, job)
             if duplicate:
                 crud.touch_existing_job(db, duplicate, job.source_names or [job.source])
                 summary["duplicates_skipped"] += 1
+                _per_source(summary, job.source)["duplicates"] += 1
                 _detail(summary, job, "duplicate_skipped", reason=f"Already exists in database (ID: {duplicate.id})")
                 continue
             facts = facts_mod.heuristic_facts(job)
@@ -223,7 +285,10 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
     # --- Pass 2: AI facts + cover letters for the most promising jobs only (cost control)
     candidates.sort(key=lambda c: c[3].score, reverse=True)
     ai_budget = llm_jobs_per_run() if llm.available_providers() else 0
+    progress.stage("scoring", f"Scoring {len(candidates)} jobs (AI reads the top {min(ai_budget, len(candidates))})...")
+    progress.counts(processed=0, total=len(candidates))
     for rank, (job, facts, filters, result) in enumerate(candidates):
+        progress.processed()
         try:
             use_ai = rank < ai_budget
             if use_ai:
@@ -243,6 +308,7 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
             job.score_breakdown = result.breakdown
             job.match_reason = result.match_reason
             if job.score < min_match_score:
+                _per_source(summary, job.source)["below_threshold"] += 1
                 _detail(summary, job, "score_below_threshold", score=job.score,
                         reason=f"Score {job.score:.1f} below minimum threshold {min_match_score:.1f}")
                 continue
@@ -254,8 +320,11 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
                 except llm.LLMError as exc:
                     logger.warning(f"Cover letter not generated for '{job.title}': {exc}")
 
-            saved_job = crud.create_job(db=db, job=job)
+            saved_job = crud.create_job(db=db, job=job)   # commits: visible to the dashboard right away
             summary["saved"] += 1
+            _per_source(summary, job.source)["saved"] += 1
+            progress.saved_job(saved_job.id, saved_job.source)
+            progress.message(f"Saved '{saved_job.title}' ({saved_job.score:.1f})")
             notified = _notify(saved_job, telegram_client)
             summary["notified"] += int(notified)
             _detail(summary, saved_job, "saved", job_id=saved_job.id, score=saved_job.score, notified=notified)
@@ -263,6 +332,11 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
             _failed(summary, db, job, item_exc)
 
     summary["filtered"] = dict(filtered)
+    progress.stage("saving", "Saving the run summary...")
+    if summary["ai_errors"]:
+        summary["errors"].append(f"AI was unavailable for {summary['ai_errors']} job(s); their keyword score was kept.")
+    if summary["failed"]:
+        summary["errors"].append(f"{summary['failed']} job(s) could not be processed (see the run details).")
 
     summary["status"] = "success"
     summary["message"] = (
@@ -272,6 +346,24 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
         f"{summary['experience_filtered']} filtered by experience, "
         f"{sum(summary['filtered'].values())} by other filters, {summary['ai_evaluated']} scored with AI facts."
     )
+
+
+def describe_crash(exc: Exception) -> str:
+    """Plain-language reason for an unexpected failure (never includes connection strings)."""
+    name = type(exc).__name__
+    if name in ("OperationalError", "DatabaseError", "InterfaceError", "ProgrammingError"):
+        return f"database problem ({name}): the database could not be read or written. Check that it is running."
+    if isinstance(exc, llm.LLMError):
+        return f"AI providers unavailable: {exc}"
+    return str(exc) or name
+
+
+def _compact(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """The parts of the summary the progress panel shows (no per-job details)."""
+    keys = ("status", "headline", "message", "total_fetched", "unique_jobs", "merged_duplicates", "duplicates_skipped",
+            "experience_filtered", "filtered", "ai_evaluated", "ai_errors", "cover_letters", "saved", "notified",
+            "failed", "per_source", "errors")
+    return {k: summary.get(k) for k in keys}
 
 
 def _min_years(job, facts) -> Optional[float]:
@@ -289,6 +381,7 @@ def _filtered_out(summary: Dict[str, Any], counter: Counter, job, filters) -> bo
     failure = first_failure(filters)
     if failure is None:
         return False
+    _per_source(summary, job.source)["filtered"] += 1
     if failure.name == "experience":
         summary["experience_filtered"] += 1
         _detail(summary, job, "experience_filtered", reason=failure.detail)
@@ -300,6 +393,7 @@ def _filtered_out(summary: Dict[str, Any], counter: Counter, job, filters) -> bo
 
 def _failed(summary: Dict[str, Any], db, job, exc: Exception) -> None:
     summary["failed"] += 1
+    _per_source(summary, getattr(job, "source", None))["failed"] += 1
     logger.error(f"Error processing job '{job.title}' at '{job.company}': {exc}")
     _detail(summary, job, "failed", error=str(exc))
     try:
@@ -333,6 +427,7 @@ def _execute_pipeline(
     http_client: Optional[Any] = None,
     only_sources: Optional[list] = None,
     started_at: Optional[str] = None,
+    progress_begun: bool = False,
 ) -> Dict[str, Any]:
     """
     Executes one pipeline run with single-run locking and isolated DB session cleanup.
@@ -346,20 +441,26 @@ def _execute_pipeline(
         return busy
 
     summary = _new_summary()
+    if not (progress_begun and progress.is_active()):
+        progress.begin()
     db = db_session
     managed_session = False
     try:
-        if db is None:
-            db = session_factory()
-            managed_session = True
         try:
+            if db is None:
+                db = session_factory()
+                managed_session = True
             _run(db, summary, http_client, telegram_client, only_sources)
         except Exception as exc:
             logger.exception("Pipeline run failed")
             summary["status"] = "error"
-            summary["message"] = f"Pipeline crashed: {exc}"
+            summary["message"] = f"Pipeline crashed: {describe_crash(exc)}"
         summary["details"] = summary["details"][:MAX_DETAILS]
-        _persist_status(db, started_at or _now_iso(), summary)
+        summary["headline"] = build_headline(summary) if summary["status"] == "success" else summary["message"]
+        if db is not None:
+            _persist_status(db, started_at or _now_iso(), summary)
+        progress.finish(summary["status"] == "success", summary["headline"], summary=_compact(summary),
+                        error=None if summary["status"] == "success" else summary["message"])
         return summary
     finally:
         try:
@@ -405,10 +506,11 @@ def get_pipeline_status(db: Optional[Any] = None) -> Dict[str, Any]:
         if isinstance(stored, dict):
             state.update({k: stored.get(k) for k in ("started_at", "finished_at", "last_run")})
     result = {
-        "running": _pipeline_lock.locked(),
+        "running": _pipeline_lock.locked() or progress.is_active(),
         "started_at": state["started_at"],
         "finished_at": state["finished_at"],
         "last_run": state["last_run"],
+        "progress": progress.snapshot(),
     }
     if db is not None:
         result["sources"] = registry.describe_sources(db)
@@ -421,6 +523,7 @@ def run_automation_pipeline(
     telegram_client: Optional[Any] = None,
     http_client: Optional[Any] = None,
     only_sources: Optional[list] = None,
+    progress_begun: bool = False,
 ) -> Dict[str, Any]:
     """
     Public entry point: runs the pipeline and records start/finish time and summary
@@ -435,10 +538,12 @@ def run_automation_pipeline(
             http_client=http_client,
             only_sources=only_sources,
             started_at=started,
+            progress_begun=progress_begun,
         )
     except Exception as exc:
         logger.exception("Pipeline crashed unexpectedly")
-        summary = {"status": "error", "message": f"Pipeline crashed: {exc}", "details": []}
+        summary = {"status": "error", "message": f"Pipeline crashed: {describe_crash(exc)}", "details": []}
+        progress.finish(False, summary["message"], error=summary["message"])
 
     # A rejected overlapping run must not overwrite the in-progress run's record.
     if summary.get("status") != "already_running":

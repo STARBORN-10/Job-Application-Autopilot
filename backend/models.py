@@ -121,3 +121,27 @@ class ApiUsage(Base):
     provider = Column(String, nullable=False)
     period = Column(String, nullable=False)              # e.g. "2026-11"
     count = Column(Integer, default=0, nullable=False)
+
+
+class TailoredResume(Base):
+    """A resume rewritten for one job (only reordered / reworded facts from the original), with scores."""
+    __tablename__ = "tailored_resumes"
+
+    id = Column(Integer, primary_key=True)
+    job_id = Column(Integer, ForeignKey("jobs.id", ondelete="CASCADE"), index=True, nullable=False)
+    resume_id = Column(Integer, index=True, nullable=False)
+    resume_hash = Column(String, nullable=False)         # version of the original resume text
+    status = Column(String, nullable=False)              # tailored / not_needed / failed
+    structured_json = Column(Text)                       # JSON: summary, skills, experience, projects, ...
+    tailored_text = Column(Text)                         # plain-text rendering (preview, re-scoring)
+    pdf_path = Column(String)                            # rendered files (regenerable from structured_json)
+    docx_path = Column(String)
+    score_before = Column(Float)
+    score_after = Column(Float)
+    breakdown_after = Column(Text)                       # JSON score breakdown with the tailored resume
+    metrics = Column(Text)                               # JSON: keyword coverage before/after, stored score
+    removed_unverified = Column(Text)                    # JSON list of items dropped by the verifier
+    gaps = Column(Text)                                  # JSON list of skills the job wants that the resume lacks
+    provider = Column(String)
+    error = Column(Text)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

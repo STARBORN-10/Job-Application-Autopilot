@@ -18,12 +18,45 @@ def _utcnow() -> datetime.datetime:
 def get_job(db: Session, job_id: int):
     return db.query(models.Job).filter(models.Job.id == job_id).first()
 
-def get_jobs(db: Session, skip: int = 0, limit: int = 100, approval_status: Optional[str] = None):
-    # Newest first, so a limit never hides the most recently found jobs.
+def get_jobs(db: Session, skip: int = 0, limit: int = 100, approval_status: Optional[str] = None,
+             sort: str = "newest"):
+    # Ordering happens in SQL before offset/limit, so a limit never hides the newest (or best) jobs.
     q = db.query(models.Job)
     if approval_status:
         q = q.filter(func.coalesce(models.Job.approval_status, "pending") == approval_status)
-    return q.order_by(models.Job.id.desc()).offset(skip).limit(limit).all()
+    if sort == "score":
+        q = q.order_by(func.coalesce(models.Job.score, -1).desc(), models.Job.id.desc())
+    else:
+        q = q.order_by(models.Job.id.desc())
+    return q.offset(skip).limit(limit).all()
+
+
+def get_top_jobs(db: Session, limit: int = 5, min_score: Optional[float] = None):
+    """Highest score first (ties: newest first). Skipped and Rejected jobs are left out."""
+    q = db.query(models.Job).filter(
+        models.Job.score.isnot(None),
+        func.coalesce(models.Job.approval_status, "pending") != "skipped",
+        func.coalesce(models.Job.status, "To Apply") != "Rejected",
+    )
+    if min_score is not None:
+        q = q.filter(models.Job.score >= min_score)
+    return q.order_by(models.Job.score.desc(), models.Job.id.desc()).limit(limit).all()
+
+
+def source_counts(db: Session) -> dict:
+    """{source (lower case): {"primary": n, "seen": n}}: primary = the job's own source; seen = in source_names."""
+    out: dict = {}
+    for source, names in db.query(models.Job.source, models.Job.source_names).all():
+        key = (source or "unknown").strip().lower()
+        out.setdefault(key, {"primary": 0, "seen": 0})["primary"] += 1
+        try:
+            listed = json.loads(names) if names else []
+        except ValueError:
+            listed = []
+        for name in {(n or "").strip().lower() for n in (listed if isinstance(listed, list) else [])} | {key}:
+            if name:
+                out.setdefault(name, {"primary": 0, "seen": 0})["seen"] += 1
+    return out
 
 def create_job(db: Session, job: schemas.JobCreate):
     data = job.model_dump()

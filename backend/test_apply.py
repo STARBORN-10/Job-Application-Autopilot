@@ -77,8 +77,8 @@ def run():
           "E-mail in the description -> email method")
     method, info = apply_service.choose_method(make_job(db, 3, "Apply on our page",
                                                         url="https://boards.greenhouse.io/three/jobs/9", approved=False))
-    check(method == "assisted" and info["ats"] == "greenhouse" and "not available yet" in info["note"],
-          "Greenhouse URL -> assisted (form filling deferred)")
+    check(method == "assisted" and info["ats"] == "greenhouse" and "pre-filled" in info["note"],
+          "Greenhouse URL -> assisted, with the form pre-fill offered")
 
     check.section("3. Dry run is the default")
     smtp = MagicMock()

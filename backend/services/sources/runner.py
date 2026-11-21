@@ -9,7 +9,7 @@ import datetime
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 
@@ -87,15 +87,36 @@ def _too_old(job, max_age_days: int) -> bool:
     return (_now() - posted).days > max_age_days
 
 
+def _safe_callback(callback):
+    """Progress reporting must never break a run."""
+    def call(*args, **kwargs):
+        if callback is None:
+            return
+        try:
+            callback(*args, **kwargs)
+        except Exception:
+            logger.exception("Progress callback failed")
+    return call
+
+
 def run_sources(
     db,
     query: SourceQuery,
     http_client: Optional[httpx.Client] = None,
     only: Optional[list[str]] = None,
+    on_progress: Optional[Callable[..., None]] = None,
 ) -> SourcesResult:
-    """Fetch from every enabled source. `only` restricts the run to the named sources (tests / manual runs)."""
+    """
+    Fetch from every enabled source. `only` restricts the run to the named sources (tests / manual runs).
+    `on_progress(name, state, label=..., count=..., reason=...)` is told when each source is waiting,
+    running, done, failed or skipped (used by the live progress panel). Disabled sources are not reported.
+    """
     result = SourcesResult()
     enabled = registry.enabled_map(db)
+    notify = _safe_callback(on_progress)
+    for source in registry.ALL_SOURCES:
+        if (source.name in only if only is not None else enabled.get(source.name, False)):
+            notify(source.name, "waiting", label=source.label)
     settings = {"ats_companies": registry.get_ats_companies(db)}
     own_client = http_client is None
     client = http_client or httpx.Client(follow_redirects=True, headers={"User-Agent": "JobApplicationAutopilot/2.0"})
@@ -112,12 +133,15 @@ def run_sources(
             if not source.is_configured():
                 entry["status"] = "not_configured"
                 entry["error"] = "Missing: " + ", ".join(source.missing_config())
+                notify(source.name, "skipped", reason=entry["error"])
                 continue
             budget = source.monthly_budget()
             if budget is not None and usage.get_count(db, source.name) >= budget:
                 entry["status"] = "skipped"
                 entry["error"] = f"Monthly budget of {budget} request(s) used up"
+                notify(source.name, "skipped", reason=entry["error"])
                 continue
+            notify(source.name, "running")
 
             counter = {"requests": 0}
             ctx = FetchContext(client=client, request=_make_request_guard(db, source, counter), settings=settings)
@@ -132,11 +156,13 @@ def run_sources(
                 entry.update(status="ok", fetched=len(jobs), count=len(fresh), stale_dropped=len(jobs) - len(fresh))
                 result.jobs.extend(fresh)
                 _record_health(db, source.name, len(fresh), None)
+                notify(source.name, "done", count=len(fresh))
             except Exception as exc:
                 message = redact(f"{type(exc).__name__}: {exc}")
                 entry.update(status="error", error=message)
                 logger.warning(f"Source '{source.name}' failed: {message}")
                 _record_health(db, source.name, None, message)
+                notify(source.name, "failed", reason=message)
             finally:
                 entry["requests"] = counter["requests"]
                 entry["seconds"] = round(time.monotonic() - started, 2)
