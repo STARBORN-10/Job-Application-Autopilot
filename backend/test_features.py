@@ -168,6 +168,37 @@ def run():
             r = client.post(f"/api/jobs/{job_id}/analyze")
         check(r.status_code == code, f"{type(exc).__name__} maps to HTTP {code}")
 
+    # ------------------------------------------------------------------
+    print("\n--- 5. Health endpoint & startup resilience ---")
+    r = client.get("/api/health")
+    check(r.status_code == 200 and r.json()["database"] == "ok", "GET /api/health returns 200 when the database is reachable")
+
+    class _DeadEngine:
+        def connect(self):
+            raise RuntimeError("could not connect to postgresql://user:SECRETPASS@db.example/prod")
+
+    with patch("main.engine", _DeadEngine()):
+        r = client.get("/api/health")
+    check(r.status_code == 503 and "unreachable" in r.json()["detail"].lower(), "Health returns 503 when the database is unreachable")
+    check("SECRETPASS" not in r.text and "postgresql://" not in r.text, "Health response never leaks connection details")
+    check(client.get("/").status_code == 200, "Root URL still answers while the database is down")
+
+    import asyncio
+    import main as _main
+    attempts = {"n": 0}
+
+    def flaky_create_all(*a, **k):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise RuntimeError("db paused")
+
+    async def run_init():
+        with patch.object(_main.models.Base.metadata, "create_all", side_effect=flaky_create_all):
+            await asyncio.wait_for(_main._init_db_with_retry(retry_seconds=0.01), timeout=5)
+
+    asyncio.run(run_init())
+    check(attempts["n"] == 3 and _main._db_state["ready"] is True, "DB init retries until the database comes back, then marks ready")
+
     db.close()
     print("\n" + "=" * 70)
     print(f"ALL FEATURE TESTS PASSED! ({passed}/{total})")

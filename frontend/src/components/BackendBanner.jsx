@@ -7,6 +7,7 @@ import { AlertCircle } from 'lucide-react';
 const BackendBanner = () => {
   const [down, setDown] = useState(false);
   const [attempts, setAttempts] = useState(0);
+  const [dbProblem, setDbProblem] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -21,8 +22,9 @@ const BackendBanner = () => {
           if (prev) window.location.reload();
           return false;
         });
-      } catch {
+      } catch (err) {
         if (cancelled) return;
+        setDbProblem(err.kind === 'database');
         setDown(true);
         setAttempts(n => n + 1);
         timer = setTimeout(check, 6000);
@@ -44,8 +46,10 @@ const BackendBanner = () => {
     }}>
       <AlertCircle size={18} />
       <span>
-        The server is not responding yet. Free hosting can take a minute or two to wake up
-        {attempts > 1 ? ` (retrying… attempt ${attempts})` : ''}. This page will reload automatically when it is ready.
+        {dbProblem
+          ? 'The server is running but cannot reach its database. If you use a free hosted database it may have been paused: open its dashboard and restore it.'
+          : 'The server is not responding yet. Free hosting can take a minute or two to wake up.'}
+        {attempts > 1 ? ` (retrying… attempt ${attempts})` : ''} This page will reload automatically when it is ready.
       </span>
     </div>
   );

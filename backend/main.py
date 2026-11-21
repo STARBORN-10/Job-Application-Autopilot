@@ -31,7 +31,8 @@ load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 # ---------------------------------------------------------------------------
 # DB table creation
 # ---------------------------------------------------------------------------
-models.Base.metadata.create_all(bind=engine)
+# Tables are created in the lifespan handler below (with retries), so the app can still
+# start and report a clear health status when the database is temporarily unreachable.
 
 # ---------------------------------------------------------------------------
 # Upload directory – store resume PDFs here
@@ -58,9 +59,27 @@ async def _scheduler_loop(interval_minutes: float):
             logger.exception("Scheduled pipeline run failed")
 
 
+_db_state = {"ready": False, "error": None}
+
+
+async def _init_db_with_retry(retry_seconds: float = 30.0):
+    """Create tables; if the database is unreachable (e.g. a paused hosted DB), keep retrying."""
+    while True:
+        try:
+            await asyncio.to_thread(models.Base.metadata.create_all, bind=engine)
+            _db_state["ready"], _db_state["error"] = True, None
+            logger.info("Database ready.")
+            return
+        except Exception as exc:
+            _db_state["ready"], _db_state["error"] = False, type(exc).__name__
+            logger.error(f"Database not reachable ({type(exc).__name__}); retrying in {retry_seconds:g}s")
+            await asyncio.sleep(retry_seconds)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Start the optional built-in scheduler (AUTO_RUN_INTERVAL_MINUTES > 0)."""
+    """Initialise the database (with retries) and start the optional scheduler."""
+    db_task = asyncio.create_task(_init_db_with_retry())
     task = None
     try:
         interval = float(os.getenv("AUTO_RUN_INTERVAL_MINUTES", "0") or 0)
@@ -71,6 +90,7 @@ async def lifespan(_app: FastAPI):
         logger.info(f"Automation scheduler enabled: every {interval:g} minute(s).")
         task = asyncio.create_task(_scheduler_loop(interval))
     yield
+    db_task.cancel()
     if task:
         task.cancel()
 
@@ -200,6 +220,18 @@ def extract_minimum_experience_years(exp_str: Optional[str]) -> Optional[float]:
 @app.get("/")
 def read_root():
     return {"message": "Job Application Autopilot API is running"}
+
+
+@app.get("/api/health")
+def health():
+    """Liveness + database check. Returns 503 with a short reason when the database is unreachable."""
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1")
+    except Exception as exc:
+        # Only the error type is returned, never the connection string or credentials.
+        raise HTTPException(status_code=503, detail=f"Database unreachable ({type(exc).__name__})")
+    return {"status": "ok", "database": "ok", "tables_ready": _db_state["ready"]}
 
 
 # ===========================================================================
