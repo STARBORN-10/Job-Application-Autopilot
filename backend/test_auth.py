@@ -452,6 +452,43 @@ def run():
                   and r.json()["user"]["is_owner"] is True, "OWNER_EMAIL takes over the old data when it registers")
 
     # ------------------------------------------------------------------
+    check.section("13b. Owner command-line tool (no e-mail password reset exists)")
+    import manage_users
+    out = io.StringIO()
+    with patch("sys.stdout", out), SessionLocal() as s:
+        manage_users.list_users(s)
+    listing = out.getvalue()
+    owner_line = next((l for l in listing.splitlines() if "owner@example.com" in l), "")
+    check(bool(owner_line) and "owner" in owner_line.split("last sign-in:")[1].split(), "list shows the accounts and marks the owner")
+    with SessionLocal() as s:
+        manage_users.reset_password(s, "owner@example.com", "reset by the owner 123")
+    check(client.get("/api/jobs", headers=A).status_code == 401, "Resetting a password ends that user's old sessions")
+    check(client.post("/api/auth/login", json={"email": "owner@example.com", "password": "reset by the owner 123"}).status_code == 200,
+          "...and the new password works")
+    try:
+        with SessionLocal() as s:
+            manage_users.reset_password(s, "owner@example.com", "short")
+        weak_refused = False
+    except SystemExit:
+        weak_refused = True
+    check(weak_refused, "A weak password is refused by the tool too")
+    with SessionLocal() as s:
+        manage_users.set_active(s, "owner@example.com", False)
+    check(client.post("/api/auth/login", json={"email": "owner@example.com", "password": "reset by the owner 123"}).status_code == 403,
+          "A disabled account cannot sign in")
+    with SessionLocal() as s:
+        manage_users.set_active(s, "owner@example.com", True)
+    check(client.post("/api/auth/login", json={"email": "owner@example.com", "password": "reset by the owner 123"}).status_code == 200,
+          "...and can again once enabled")
+    try:
+        with SessionLocal() as s:
+            manage_users.reset_password(s, "nobody-here@example.com", "whatever 12345")
+        unknown_refused = False
+    except SystemExit:
+        unknown_refused = True
+    check(unknown_refused, "An unknown e-mail is reported, not ignored")
+    auth.login_limiter.reset()
+
     check.section("14. Every query style is filtered on every per-user table (regression: Query.count() once leaked)")
     from sqlalchemy import func, select
     with SessionLocal() as s:
