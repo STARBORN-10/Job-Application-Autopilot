@@ -17,6 +17,8 @@ const ScoringSettings = () => {
   const [message, setMessage] = useState(null);
   const [saving, setSaving] = useState(false);
   const [suggestion, setSuggestion] = useState(null);
+  const [tuning, setTuning] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
     fetchScoringWeights()
@@ -25,9 +27,17 @@ const ScoringSettings = () => {
         setDefaults(d.defaults);
         setParts(d.parts);
       })
-      .catch((err) => setMessage({ type: 'error', text: err.message }));
+      .catch((err) => setLoadError(err.message));
   }, []);
 
+  if (loadError) {
+    return (
+      <section className="card settings-card">
+        <h2 className="card-title"><Scale size={20} color="var(--primary)" /> Score weights</h2>
+        <p className="text-danger small">Could not load the weights: {loadError}</p>
+      </section>
+    );
+  }
   if (!weights) return null;
   const total = parts.reduce((sum, p) => sum + (Number(weights[p]) || 0), 0);
 
@@ -47,6 +57,7 @@ const ScoringSettings = () => {
 
   const suggest = async (apply) => {
     setMessage(null);
+    setTuning(true);
     try {
       const res = await tuneScoringWeights(apply);
       setSuggestion(res);
@@ -56,13 +67,15 @@ const ScoringSettings = () => {
       }
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
+    } finally {
+      setTuning(false);
     }
   };
 
   const changed = suggestion && parts.some((p) => suggestion.new_weights[p] !== suggestion.old_weights[p]);
 
   return (
-    <div className="card" style={{ maxWidth: '850px', marginBottom: '2rem' }}>
+    <section className="card settings-card">
       <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <Scale size={20} color="var(--primary)" /> Score weights
       </h2>
@@ -71,7 +84,7 @@ const ScoringSettings = () => {
         how much each part counts. AI only extracts facts (skills, years, level); it does not pick the score.
       </p>
       {parts.map((p) => (
-        <div key={p} style={{ display: 'grid', gridTemplateColumns: '140px 90px 1fr', gap: '0.75rem', alignItems: 'center', marginBottom: '0.6rem' }}>
+        <div key={p} className="weight-row">
           <label className="form-label" style={{ margin: 0, textTransform: 'capitalize' }} htmlFor={`w-${p}`}>{p}</label>
           <input id={`w-${p}`} type="number" min="0" max="100" step="1" className="form-control" value={weights[p]}
             onChange={(e) => setWeights({ ...weights, [p]: parseInt(e.target.value, 10) || 0 })} />
@@ -84,16 +97,16 @@ const ScoringSettings = () => {
         </span>
         <button type="button" className="btn btn-primary" disabled={saving || total !== 100} onClick={save}
           style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-          <Save size={14} /> Save weights
+          {saving ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Save size={14} />} {saving ? 'Saving...' : 'Save weights'}
         </button>
         <button type="button" className="btn btn-outline" onClick={() => setWeights(defaults)}
           style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <RotateCcw size={14} /> Defaults
         </button>
-        <button type="button" className="btn btn-outline" onClick={() => suggest(false)}
-          style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+        <button type="button" className="btn btn-outline" onClick={() => suggest(false)} disabled={tuning}
           title="Learn from your Approve / Skip decisions (needs 30+). Shows a suggestion; nothing changes until you apply it.">
-          <Wand2 size={14} /> Suggest from my decisions
+          {tuning ? <span className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} /> : <Wand2 size={14} />}
+          {tuning ? 'Learning...' : 'Suggest from my decisions'}
         </button>
         {message && (
           <span style={{ fontSize: '0.85rem', display: 'inline-flex', gap: 4, alignItems: 'center',
@@ -117,13 +130,13 @@ const ScoringSettings = () => {
                 ))}
               </div>
               {!suggestion.applied && (
-                <button type="button" className="btn btn-primary" onClick={() => suggest(true)}>Apply suggestion</button>
+                <button type="button" className="btn btn-primary" onClick={() => suggest(true)} disabled={tuning}>Apply suggestion</button>
               )}
             </>
           )}
         </div>
       )}
-    </div>
+    </section>
   );
 };
 

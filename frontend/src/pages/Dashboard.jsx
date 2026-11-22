@@ -1,233 +1,118 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { fetchJobs, triggerAutomation, fetchAutomationStatus, fetchGeneralSettings } from '../api';
-import { Briefcase, CheckCircle, Clock, Star, Target, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Briefcase, CheckCircle, Clock, Star, Target, RefreshCw } from 'lucide-react';
+import { fetchJobs, fetchTopJobs, fetchGeneralSettings } from '../api';
+import { usePipeline } from '../context/contexts';
+import FindJobsButton from '../components/FindJobsButton';
+import PipelineProgress from '../components/PipelineProgress';
+import JobCard from '../components/JobCard';
+import { ErrorState, PageLoader, Spinner } from '../components/Feedback';
+
+const TOP_COUNT = 5;
 
 const Dashboard = () => {
+  const { jobsVersion, newJobIds } = usePipeline();
   const [jobs, setJobs] = useState([]);
+  const [top, setTop] = useState([]);
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [triggering, setTriggering] = useState(false);
-  const [triggerAlert, setTriggerAlert] = useState(null);
-  const mountedRef = useRef(true);
+  const [error, setError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const loadData = async (isRefresh = false) => {
-    if (isRefresh) setRefreshing(true);
-    try {
-      const [jobsData, settingsData] = await Promise.all([
-        fetchJobs(),
-        fetchGeneralSettings().catch(() => null),
-      ]);
-      setJobs(jobsData);
-      if (settingsData) setSettings(settingsData);
-    } catch (err) {
-      console.error("Failed to fetch dashboard data", err);
-    } finally {
-      setLoading(false);
-      if (isRefresh) setRefreshing(false);
-    }
-  };
-
+  // Reload on mount, on Refresh, and whenever the running job search saves new jobs.
   useEffect(() => {
-    loadData();
-    return () => { mountedRef.current = false; };
-  }, []);
+    let cancelled = false;
+    Promise.all([fetchJobs(), fetchTopJobs(TOP_COUNT), fetchGeneralSettings().catch(() => null)])
+      .then(([all, best, s]) => {
+        if (cancelled) return;
+        setJobs(all);
+        setTop(best);
+        if (s) setSettings(s);
+        setError(null);
+      })
+      .catch((err) => { if (!cancelled) setError(err.message); })
+      .finally(() => { if (!cancelled) { setLoading(false); setRefreshing(false); } });
+    return () => { cancelled = true; };
+  }, [reloadKey, jobsVersion]);
 
-  const handleTriggerAutomation = async () => {
-    setTriggering(true);
-    setTriggerAlert(null);
-    try {
-      // Remember the last finished run so we can tell when a *new* one completes.
-      const before = (await fetchAutomationStatus().catch(() => null))?.finished_at ?? null;
-      await triggerAutomation();
-
-      // Poll until the pipeline finishes (max ~10 minutes).
-      let status = null;
-      for (let i = 0; i < 300 && mountedRef.current; i++) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        status = await fetchAutomationStatus().catch(() => null);
-        if (status && !status.running && status.finished_at !== before) break;
-      }
-      if (!mountedRef.current) return;
-
-      const run = status?.last_run;
-      // Per-source outcome, e.g. "jsearch 10, adzuna 38, jooble error".
-      const perSource = Object.entries(run?.sources || {})
-        .filter(([, r]) => r.status === 'ok' || r.status === 'error')
-        .map(([name, r]) => (r.status === 'ok' ? `${name} ${r.count}` : `${name} error`))
-        .join(', ');
-      if (run?.status === 'success') {
-        setTriggerAlert({ type: 'success', message: perSource ? `${run.message} Sources: ${perSource}.` : run.message });
-      } else {
-        const msg = run?.message || 'Automation did not finish in time. Check back shortly.';
-        setTriggerAlert({
-          type: 'error',
-          message: msg,
-          needsConfig: /resume/i.test(msg) || /API key|not set|configur/i.test(msg),
-        });
-      }
-      await loadData(true);
-    } catch (err) {
-      setTriggerAlert({
-        type: 'error',
-        message: err.message || 'Failed to start the automation pipeline.',
-      });
-    } finally {
-      setTriggering(false);
-    }
+  const refresh = () => { setRefreshing(true); setReloadKey((k) => k + 1); };
+  const replaceJob = (updated) => {
+    setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
+    setReloadKey((k) => k + 1); // a decision can change the top list (skipped jobs drop out)
   };
 
-  if (loading) {
-    return (
-      <div className="loader-container">
-        <div className="spinner"></div>
-      </div>
-    );
-  }
+  if (loading) return <PageLoader label="Loading your dashboard" />;
 
-  const minScore = settings?.min_match_score || 7.0;
-  const goodMatches = jobs.filter(j => j.score >= minScore);
-  const toApply = jobs.filter(j => j.status === 'To Apply');
-  const applied = jobs.filter(j => j.status !== 'To Apply' && j.status !== 'Rejected');
-  const avgScore = jobs.length ? (jobs.reduce((acc, j) => acc + (j.score || 0), 0) / jobs.length).toFixed(1) : '0.0';
+  const minScore = settings?.min_match_score ?? 7.0;
+  const scored = jobs.filter((j) => typeof j.score === 'number');
+  const goodMatches = scored.filter((j) => j.score >= minScore);
+  const toApply = jobs.filter((j) => (j.status || 'To Apply') === 'To Apply' && j.approval_status !== 'skipped');
+  const appliedOrLater = jobs.filter((j) => ['Applied', 'Interview', 'Offer'].includes(j.status));
+  const avgScore = scored.length ? (scored.reduce((acc, j) => acc + j.score, 0) / scored.length).toFixed(1) : '-';
+  const newCount = jobs.filter((j) => newJobIds.has(j.id)).length;
+
+  const stats = [
+    ['Jobs found', jobs.length, Briefcase, 'var(--primary)', newCount ? `${newCount} new in the latest search` : null],
+    [`Good matches (score ≥ ${minScore})`, goodMatches.length, Target, 'var(--success)', null],
+    ['To apply', toApply.length, Clock, 'var(--warning)', 'Not applied yet and not skipped'],
+    ['Applied or further', appliedOrLater.length, CheckCircle, 'var(--primary)', 'Applied, Interview or Offer'],
+    ['Average score', avgScore, Star, 'var(--warning)', null],
+  ];
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
-        <div>
-          <h1 className="page-title" style={{ margin: 0 }}>Dashboard</h1>
-          <p className="page-description" style={{ marginTop: '0.25rem' }}>
-            Overview of your automated job hunting {settings?.active_role ? `for ${settings.active_role}` : ''}.
+      <div className="page-head">
+        <div className="page-head-text">
+          <h1 className="page-title">Dashboard</h1>
+          <p className="page-description">
+            Your job search at a glance{settings?.active_role ? ` for ${settings.active_role}` : ''}.
           </p>
         </div>
-
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <button
-            className="btn btn-outline"
-            onClick={() => loadData(true)}
-            disabled={refreshing}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
-            title="Refresh jobs from database"
-          >
-            <RefreshCw size={15} className={refreshing ? 'spinner' : ''} />
-            {refreshing ? 'Refreshing…' : 'Refresh'}
+        <div className="btn-group">
+          <button type="button" className="btn btn-outline" onClick={refresh} disabled={refreshing}
+            title="Reload jobs from the database">
+            {refreshing ? <Spinner size={14} label="Refreshing" /> : <RefreshCw size={15} />}
+            {refreshing ? 'Refreshing...' : 'Refresh'}
           </button>
-
-          <button
-            className="btn btn-primary"
-            onClick={handleTriggerAutomation}
-            disabled={triggering}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', boxShadow: '0 2px 8px rgba(79, 70, 229, 0.25)' }}
-          >
-            {triggering ? <span className="spinner" style={{ width: 15, height: 15, borderWidth: 2 }} /> : <Sparkles size={16} />}
-            {triggering ? 'Searching for jobs…' : 'Find New Jobs'}
-          </button>
+          <FindJobsButton />
         </div>
       </div>
 
-      {triggerAlert && (
-        <div style={{
-          backgroundColor: triggerAlert.type === 'success' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-          color: triggerAlert.type === 'success' ? 'var(--success)' : 'var(--danger)',
-          border: `1px solid ${triggerAlert.type === 'success' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`,
-          padding: '0.85rem 1.25rem',
-          borderRadius: 'var(--radius-md)',
-          marginBottom: '1.5rem',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: '1rem',
-          animation: 'fadeIn 0.2s ease',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            {triggerAlert.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
-            <span>{triggerAlert.message}</span>
-          </div>
-          {triggerAlert.needsConfig && (
-            <Link to="/settings" className="btn btn-outline" style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem' }}>
-              Configure in Settings
-            </Link>
-          )}
-        </div>
-      )}
+      <PipelineProgress />
+      {error && <ErrorState title="Could not load your jobs" message={error} onRetry={refresh} />}
 
       <div className="grid-stats">
-        <div className="card stat-card">
-          <div className="stat-label">Total Jobs Found</div>
-          <div className="stat-value" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Briefcase size={28} color="var(--primary)" />
-            {jobs.length}
+        {stats.map(([label, value, Icon, color, hint]) => (
+          <div key={label} className="card stat-card">
+            <div className="stat-label">{label}</div>
+            <div className="stat-value"><Icon size={26} color={color} aria-hidden="true" /> {value}</div>
+            {hint && <div className="stat-hint">{hint}</div>}
           </div>
-        </div>
-        <div className="card stat-card">
-          <div className="stat-label">Good Matches (&ge; {minScore})</div>
-          <div className="stat-value" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Target size={28} color="var(--success)" />
-            {goodMatches.length}
-          </div>
-        </div>
-        <div className="card stat-card">
-          <div className="stat-label">To Apply</div>
-          <div className="stat-value" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Clock size={28} color="var(--warning)" />
-            {toApply.length}
-          </div>
-        </div>
-        <div className="card stat-card">
-          <div className="stat-label">Applications Sent</div>
-          <div className="stat-value" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <CheckCircle size={28} color="var(--primary)" />
-            {applied.length}
-          </div>
-        </div>
-        <div className="card stat-card">
-          <div className="stat-label">Avg. Match Score</div>
-          <div className="stat-value" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Star size={28} color="var(--warning)" fill="var(--warning)" />
-            {avgScore}
-          </div>
-        </div>
+        ))}
       </div>
 
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-          <h2 className="card-title" style={{ margin: 0 }}>Top Matching Opportunities</h2>
-          <Link to="/jobs" style={{ fontSize: '0.85rem', color: 'var(--primary)', textDecoration: 'none', fontWeight: 500 }}>
-            View All Jobs &rarr;
-          </Link>
+      <section className="card">
+        <div className="section-head">
+          <div>
+            <h2 className="card-title">Top matching opportunities</h2>
+            <p className="muted small">Highest score first (ties: newest). Jobs you marked "Not interested" or Rejected are hidden.</p>
+          </div>
+          <Link to="/jobs" className="link-more">View all jobs &rarr;</Link>
         </div>
         <div className="job-list">
-          {goodMatches.slice(0, 5).map(job => (
-            <div key={job.id} className="job-item">
-              <div className="job-info">
-                <h3>{job.title}</h3>
-                <div className="job-meta">
-                  <span>{job.company}</span>
-                  <span>•</span>
-                  <span>{job.location || 'Remote'}</span>
-                  <span>•</span>
-                  <span>{job.experience || 'Fresher / Entry'}</span>
-                </div>
-              </div>
-              <div className="job-actions" style={{ alignItems: 'center' }}>
-                <div className={`score-${job.score >= 8 ? 'high' : job.score >= 5 ? 'medium' : 'low'}`} style={{ fontWeight: 'bold', marginRight: '1rem' }}>
-                  {job.score}/10 Match
-                </div>
-                <Link to={`/jobs/${job.id}`} className="btn btn-outline">View Details</Link>
-              </div>
-            </div>
+          {top.map((job) => (
+            <JobCard key={job.id} job={job} variant="compact" isNew={newJobIds.has(job.id)} onChange={replaceJob} />
           ))}
-          {goodMatches.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)' }}>
-              <p style={{ margin: '0 0 0.5rem 0' }}>No high match jobs found yet.</p>
-              <p style={{ fontSize: '0.85rem', margin: 0 }}>
-                Click <strong>"Find New Jobs"</strong> above or configure your search in Settings to start discovering jobs.
-              </p>
+          {top.length === 0 && !error && (
+            <div className="empty-state">
+              <p><strong>No scored jobs yet.</strong></p>
+              <p className="muted small">Click <strong>Find New Jobs</strong> to search every enabled source, or check your
+                resume and sources in <Link to="/settings">Settings</Link>.</p>
             </div>
           )}
         </div>
-      </div>
+      </section>
     </div>
   );
 };

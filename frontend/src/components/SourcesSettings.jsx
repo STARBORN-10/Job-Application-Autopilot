@@ -76,7 +76,7 @@ const SourcesSettings = () => {
         setCompanies(c.companies);
         setProviders(p);
       })
-      .catch((err) => setMessage({ type: 'error', text: err.message }));
+      .catch((err) => setMessage({ type: 'error', text: `Could not load sources: ${err.message}` }));
   }, []);
 
   const handleToggle = async (name, enabled) => {
@@ -111,7 +111,7 @@ const SourcesSettings = () => {
 
   return (
     <>
-      <div className="card" style={{ maxWidth: '850px', marginBottom: '2rem' }}>
+      <div className="card settings-card">
         <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Database size={20} color="var(--primary)" /> Job Sources
         </h2>
@@ -133,7 +133,7 @@ const SourcesSettings = () => {
         </div>
       </div>
 
-      <div className="card" style={{ maxWidth: '850px', marginBottom: '2rem' }}>
+      <div className="card settings-card">
         <h2 className="card-title">Company career boards</h2>
         <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
           Companies whose public Greenhouse, Lever or Ashby board is checked each run (one request per company). The
@@ -141,7 +141,7 @@ const SourcesSettings = () => {
           <code>jobs.lever.co/<b>cred</b></code>. Only postings in your preferred locations that fit your role are kept.
         </p>
         {companies.map((c, i) => (
-          <div key={i} style={{ display: 'grid', gridTemplateColumns: '140px 1fr 1fr 40px', gap: '0.5rem', marginBottom: '0.5rem' }}>
+          <div key={i} className="ats-row">
             <select className="form-control" value={c.provider} onChange={(e) => updateCompany(i, 'provider', e.target.value)}>
               <option value="greenhouse">Greenhouse</option>
               <option value="lever">Lever</option>
@@ -169,7 +169,7 @@ const SourcesSettings = () => {
         </div>
       </div>
 
-      <div className="card" style={{ maxWidth: '850px', marginBottom: '2rem' }}>
+      <div className="card settings-card">
         <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Cpu size={20} color="var(--primary)" /> AI providers
         </h2>

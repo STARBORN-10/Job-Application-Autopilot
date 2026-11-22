@@ -36,7 +36,7 @@ export const ScoreBreakdownCompact = ({ breakdown }) => {
   const matched = breakdown.matched_skills || [];
   const total = matched.length + (breakdown.missing_skills || []).length;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.75rem' }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.35rem 0.75rem', fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.35rem 0' }}>
       <div style={{ display: 'flex', gap: 3 }} aria-label="Score parts">
         {PART_ORDER.map((p) => {
           const v = breakdown.parts[p]?.value ?? 0;
@@ -89,7 +89,7 @@ const ScoreBreakdown = ({ breakdown }) => {
           const pct = Math.round(part.value * 100);
           return (
             <div key={p}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: 3 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', gap: '0 0.5rem', fontSize: '0.8rem', marginBottom: 3 }}>
                 <span style={{ fontWeight: 600 }}>{PART_LABELS[p]} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>· weight {part.weight}%</span></span>
                 <span style={{ color: 'var(--text-muted)' }}>{pct}% → {part.points} pts</span>
               </div>
@@ -101,7 +101,7 @@ const ScoreBreakdown = ({ breakdown }) => {
           );
         })}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem', marginTop: '1.25rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: '1rem', marginTop: '1.25rem' }}>
         <div>
           <div className="stat-label" style={{ color: 'var(--success)', marginBottom: 6 }}>Skills you have</div>
           {matched.length || niceMatched.length ? (
