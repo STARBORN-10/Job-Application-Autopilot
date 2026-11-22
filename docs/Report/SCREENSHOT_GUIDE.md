@@ -17,28 +17,25 @@ caption already. Replace each frame with a real screenshot using this list.
 2. Right-click, then **Change Picture**, then **From a File**, and choose your screenshot.
    Word keeps the same place and size, and the figure number and caption stay.
 3. When all screenshots are in, press **Ctrl + A** and then **F9** (choose **Update entire table** if Word asks).
-   This refreshes the page numbers in the Table of Contents, the List of Figures and the List of Tables.
+   This refreshes the page numbers in the Table of Contents and the List of Figures.
    Word may also ask "update fields?" when you open the file: click **Yes**.
    Do this once more just before you print or export to PDF, because pictures move the pages.
 
 In PowerPoint: click the picture, right-click, **Change Picture**, **From a File**.
 
-## The screenshots for the report (Chapters 4 and 5)
+## The screenshots for the report
+
+The report has five grey frames. Four are screenshots of the running website or Telegram, and one is the workflow map.
 
 | Figure | Caption in the report | Open this | What it must show |
 |---|---|---|---|
-| **Fig 4.5** | The interactive workflow map | `http://localhost:5173/workflow.html` (or double-click `frontend/public/workflow.html`) | Close the welcome box, press the **fit** button (square icon, bottom right) so the whole map is visible. Light theme looks best in print. |
-| **Fig 5.1** | Sign-in and create-account page | `http://localhost:5173/` while signed out (sign out first, or use a private window) | The **Create your account** form (press "Create an account"), empty or with only the name filled. Do not show a real password. |
-| **Fig 5.2** | Dashboard with live search progress | `http://localhost:5173/` | Press **Find New Jobs** and capture while the progress panel is running: the step bar, one row per source, and the "new jobs" counter. |
-| **Fig 5.3** | Job list with source filter and badges | `http://localhost:5173/jobs` | Several jobs with their source badges (JSearch, Adzuna, Jooble...). Open the **All sources** drop-down so the list of sources is visible. |
-| **Fig 5.4** | Job page with score breakdown and cover letter | Open any job from the list (a job scoring below 9 is best) | The score, the colour breakdown ("Why this score", matched and missing skills) and the start of the cover letter. Scroll so these are on screen. |
-| **Fig 5.5** | Approve confirmation and application outcome | The same job page: press **Approve & apply** | Either the confirmation box ("what will happen"), or after confirming, the **Application** section with the outcome and the timeline. The outcome section is the more useful one. |
-| **Fig 5.6** | Tailored resume with before and after score | The job page of a job that was approved (the tailored resume is made on approval), or press **Tailor resume** | The **Resume for this job** section: the before and after scores, the gaps list and the PDF / Word buttons. |
-| **Fig 5.7** | Analytics page | `http://localhost:5173/analytics` | The charts with some data in them (run a search or two first). |
-| **Fig 5.8** | Profile page with Telegram connection | `http://localhost:5173/profile` | The page after pressing **Connect Telegram** (code and "Open Telegram" button), or after connecting (green "Connected"). Hide your e-mail if it is personal. |
-| **Fig 5.9** | Telegram alert with Approve and Skip buttons | Telegram on your phone or desktop | One job alert from the bot with the **Approve**, **Skip** and **Cover letter** buttons visible. Hide your name if shown. |
+| **Fig 4.3** | The interactive workflow map | `http://localhost:5173/workflow.html` (or double-click `frontend/public/workflow.html`) | Close the welcome box, press the **fit** button (square icon, bottom right) so the whole map is visible. Light theme looks best in print. |
+| **Fig 5.1** | Dashboard with live search progress | `http://localhost:5173/` | Press **Find New Jobs** and capture while the progress panel is running: the step bar, one row per source, and the "new jobs" counter. |
+| **Fig 5.2** | Job page with score breakdown and cover letter | Open any job from the list (a job scoring below 9 is best) | The score, the colour breakdown ("Why this score", matched and missing skills) and the start of the cover letter. Scroll so these are on screen. |
+| **Fig 5.3** | Profile page with Telegram connection | `http://localhost:5173/profile` | The page after pressing **Connect Telegram** (code and "Open Telegram" button), or after connecting (green "Connected"). Hide your e-mail if it is personal. |
+| **Fig 5.4** | Telegram alert with Approve and Skip buttons | Telegram on your phone or desktop | One job alert from the bot with the **Approve**, **Skip** and **Cover letter** buttons visible. Hide your name if shown. |
 
-The other figures (3.1, 3.2, 4.1, 4.2, 4.3, 4.4) are diagrams and are already in the report.
+The other figures (3.1, 4.1, 4.2) are diagrams and are already in the report.
 
 ## The screenshots for the presentation (slide 9, "Website Tour")
 
@@ -46,10 +43,10 @@ Slide 9 has four frames. Reuse the screenshots above:
 
 | Slide 9 position | Caption | Use this screenshot |
 |---|---|---|
-| Top left | Dashboard with live progress | Fig 5.2 |
-| Top right | Job page: score breakdown + letter | Fig 5.4 |
-| Bottom left | Profile with Telegram link | Fig 5.8 |
-| Bottom right | Telegram alert with buttons | Fig 5.9 |
+| Top left | Dashboard with live progress | Fig 5.1 |
+| Top right | Job page: score breakdown + letter | Fig 5.2 |
+| Bottom left | Profile with Telegram link | Fig 5.3 |
+| Bottom right | Telegram alert with buttons | Fig 5.4 |
 
 ## Where to see the workflow map when you present
 
