@@ -145,6 +145,13 @@ def run():
     v = resume_tailor.Verifier(ORIGINAL)
     check(v.numbers_supported("CGPA 8.4, 87%")[0] and not v.numbers_supported("CGPA 9.1")[0], "Number check")
     check(v.dates_supported("2022 - 2026") and not v.dates_supported("2019"), "Date check")
+    broken = "Jan 2025 â€“ Mar 2025 â€™s â€¢ ok café"
+    check(resume_tailor.fix_mojibake(broken) == "Jan 2025 – Mar 2025 ’s • ok café",
+          "Broken PDF dashes/quotes/bullets are repaired; real accented text is untouched")
+    iv = resume_tailor.Verifier("AWS AI/ML Virtual Internship - AICTE. Built models in Python.")
+    check(iv.phrase_supported("AWS AI/ML Virtual Intern") and iv.phrase_supported("Python Developer") is False,
+          "Title 'Intern' matches the resume's 'Internship' (stem), an unrelated word does not")
+    check(not iv.phrase_supported("Senior Machine Learning Manager"), "Invented seniority/title still rejected")
 
     check.section("2. Score already at or above the threshold: original kept, no AI call")
     high = make_job(db, "Machine Learning Engineer", score=9.3, url="https://jobs.example.in/high")
@@ -172,6 +179,15 @@ def run():
     check(abs(info["score_before"] - stored) < 0.11, f"'Before' re-score matches the stored score ({info['score_before']} vs {stored})")
     check(info["score_after"] >= info["score_before"], f"Tailoring never lowers the score ({info['score_before']} -> {info['score_after']})")
     check(info["score_after"] < 9.0, "The score stays honest: it does not reach 9 when real skills are missing")
+    # A job saved by the old V1 pipeline has a single AI-opinion score and no breakdown: the page must say why
+    # the before/after numbers differ from the saved score.
+    legacy = make_job(db, "Machine Learning Engineer", score=8.9, url="https://jobs.example.in/legacy")
+    legacy.score_breakdown = None
+    db.commit()
+    with patch("services.resume_tailor.llm.generate_json", side_effect=fake_generate):
+        lrow = resume_tailor.tailor_for_job(db, legacy, regenerate=True)
+    check(lrow.status == "tailored" and "older AI-opinion score" in resume_tailor.to_dict(lrow)["message"],
+          "Legacy (V1) score is explained next to the before/after numbers")
     # What would the score have been if the invented skills had been accepted? It must be higher than what we report.
     settings = crud.get_general_settings(db)
     cheat_profile = heuristic_profile(ORIGINAL, settings.active_role, settings.target_roles)
@@ -222,6 +238,9 @@ def run():
     check(api.get(f"/api/jobs/{high.id}/tailored-resume.pdf").status_code == 404,
           "No file when the original is used (not_needed)")
     check(api.get("/api/jobs/99999/tailored-resume").status_code == 404, "Unknown job -> 404")
+    with patch("services.resume_tailor.latest", return_value=None):
+        r = api.get(f"/api/jobs/{nojob.id}/tailored-resume")
+    check(r.status_code == 200 and r.json() is None, "No tailored resume yet -> 200 null (not a 404 error)")
     check(api.get(f"/api/jobs/{nojob.id}/tailored-resume.txt").status_code == 404, "Unknown file type -> 404")
 
     check.section("7. Approve uses the tailored resume")

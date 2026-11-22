@@ -17,6 +17,12 @@ DEFAULT_ATS_COMPANIES = [
     {"provider": "greenhouse", "token": "groww", "name": "Groww"},
     {"provider": "greenhouse", "token": "databricks", "name": "Databricks"},
     {"provider": "greenhouse", "token": "stripe", "name": "Stripe"},
+    # Verified in November 2026: each board lists many India openings.
+    {"provider": "greenhouse", "token": "razorpaysoftwareprivatelimited", "name": "Razorpay"},
+    {"provider": "greenhouse", "token": "zscaler", "name": "Zscaler"},
+    {"provider": "greenhouse", "token": "okta", "name": "Okta"},
+    {"provider": "greenhouse", "token": "mongodb", "name": "MongoDB"},
+    {"provider": "ashby", "token": "sarvam", "name": "Sarvam AI"},
     {"provider": "lever", "token": "cred", "name": "CRED"},
     {"provider": "lever", "token": "meesho", "name": "Meesho"},
     {"provider": "lever", "token": "paytm", "name": "Paytm"},

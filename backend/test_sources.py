@@ -78,6 +78,44 @@ def run():
           "Bot-check page titles are not used as company names")
 
     # ------------------------------------------------------------------
+    check.section("1b. Amazon Jobs India")
+    amazon_data = {"jobs": [
+        {"title": "Applied Scientist, Machine Learning", "id_icims": "111", "job_path": "/en/jobs/111/applied-scientist",
+         "normalized_location": "Bengaluru, Karnataka, IND", "description": "Build <b>Python</b> ML models.<br/>Ship to prod.",
+         "basic_qualifications": "- 3+ years of Python experience<br/>- ML", "preferred_qualifications": "- AWS",
+         "job_schedule_type": "full-time", "posted_date": "November 20, 2026", "is_intern": None},
+        {"title": "Python Developer Intern", "id_icims": "222", "job_path": "/en/jobs/222/python-intern",
+         "normalized_location": "Hyderabad, Telangana, IND", "description": "Python developer internship.",
+         "job_schedule_type": "full-time", "posted_date": "Nov 2, 2026", "is_intern": True},
+        {"title": "Warehouse Associate", "id_icims": "333", "job_path": "/en/jobs/333/warehouse",
+         "normalized_location": "Pune, Maharashtra, IND", "description": "Pick and pack.", "posted_date": "November 1, 2026"},
+        {"title": "No path job", "description": "x"},
+    ]}
+    seen = []
+    client = mock_client({"www.amazon.jobs": ok_json(amazon_data)}, seen)
+    res = runner.run_sources(db, QUERY, http_client=client, only=["amazon"])
+    names = {j.title: j for j in res.jobs}
+    check(len(seen) == 1 and seen[0].url.params["country"] == "IND" and seen[0].url.params["base_query"] == "Python Developer",
+          "One request, India only, role as the search term")
+    check("Warehouse Associate" not in names and "No path job" not in names, "Off-role and broken postings dropped")
+    sci = names["Applied Scientist, Machine Learning"]
+    check(sci.url == "https://www.amazon.jobs/en/jobs/111/applied-scientist" and sci.company == "Amazon"
+          and sci.location == "Bengaluru, Karnataka, India", "URL, company and location normalised")
+    check("Basic qualifications" in sci.description and "<br/>" not in sci.description and sci.description_quality == "full",
+          "Qualifications appended, HTML stripped, marked full")
+    check(sci.posted_date == datetime.datetime(2026, 11, 20) and sci.external_id == "111", "Posted date and id parsed")
+    check(names["Python Developer Intern"].job_type == "Internship"
+          and names["Python Developer Intern"].posted_date == datetime.datetime(2026, 11, 2), "Internship flag and short month parsed")
+    us_query = SourceQuery(role="Python Developer", locations=["Remote"], country_code="us")
+    seen = []
+    res = runner.run_sources(db, us_query, http_client=mock_client({"www.amazon.jobs": ok_json(amazon_data)}, seen), only=["amazon"])
+    check(not seen and not res.jobs, "Non-India searches make no request")
+    check(registry.get_source("amazon") is not None and registry.enabled_map(db)["amazon"] is True,
+          "Amazon is registered and on by default")
+    defaults = {(c["provider"], c["token"]) for c in registry.DEFAULT_ATS_COMPANIES}
+    check({("greenhouse", "razorpaysoftwareprivatelimited"), ("ashby", "sarvam")} <= defaults, "Verified India boards in the defaults")
+
+    # ------------------------------------------------------------------
     check.section("2. Jooble")
     jooble_data = fixture_json("jooble_in.json")
     for item in jooble_data["jobs"]:
@@ -253,7 +291,7 @@ def run():
     api = TestClient(app)
     r = api.get("/api/sources")
     names = [s["name"] for s in r.json()]
-    check(r.status_code == 200 and names == ["jsearch", "adzuna", "jooble", "ats", "internshala", "jobspy"],
+    check(r.status_code == 200 and names == ["jsearch", "adzuna", "jooble", "ats", "amazon", "internshala", "jobspy"],
           "GET /api/sources lists all sources")
     ad = next(s for s in r.json() if s["name"] == "adzuna")
     check(ad["configured"] is True and ad["health"]["last_error"] and ad["description_quality"] == "snippet",
@@ -291,7 +329,7 @@ def run():
     pipeline._run_state.update(started_at=None, finished_at=None, last_run=None)  # simulate a restart
     status = api.get("/api/automation/status").json()
     check(status["last_run"] and status["last_run"]["status"] == "error", "Last run is read back from the database after a restart")
-    check(status["running"] is False and len(status["sources"]) == 6, "Status keeps old fields and adds 'sources'")
+    check(status["running"] is False and len(status["sources"]) == 7, "Status keeps old fields and adds 'sources'")
     check("jooble" in status["last_run"]["sources"], "Run summary has per-source results")
 
     app.dependency_overrides.clear()

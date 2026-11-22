@@ -990,14 +990,16 @@ def tailor_resume(job_id: int, regenerate: bool = Query(False), db: Session = De
 
 @app.get("/api/jobs/{job_id}/tailored-resume")
 def get_tailored_resume(job_id: int, db: Session = Depends(get_db)):
-    """The latest tailored resume for this job and the active resume (404 when none was made yet)."""
+    """The latest tailored resume for this job and the active resume (null when none was made yet)."""
     job = _job_or_404(db, job_id)
     resume = crud.get_active_resume_for_role(db, crud.get_general_settings(db).active_role)
     row = resume_tailor.latest(db, job.id, resume) if resume is not None else None
     if row is None:
         row = resume_tailor.latest(db, job.id)
         if row is None:
-            raise HTTPException(status_code=404, detail="No tailored resume for this job yet.")
+            # Not an error: most jobs have no tailored resume yet. A 404 here shows up as a red
+            # error in the browser console on every job page.
+            return None
     data = resume_tailor.to_dict(row, job)
     data["outdated"] = resume is None or row.resume_id != resume.id
     return data

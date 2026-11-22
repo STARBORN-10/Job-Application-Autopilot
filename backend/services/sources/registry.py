@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 import crud, models
 from services.sources.adzuna import AdzunaSource
+from services.sources.amazon import AmazonJobsSource
 from services.sources.ats import DEFAULT_ATS_COMPANIES, AtsBoardsSource
 from services.sources.base import JobSource
 from services.sources.internshala import InternshalaSource
@@ -20,6 +21,7 @@ ALL_SOURCES: list[JobSource] = [
     AdzunaSource(),
     JoobleSource(),
     AtsBoardsSource(),
+    AmazonJobsSource(),
     InternshalaSource(),
     JobSpySource(),
 ]

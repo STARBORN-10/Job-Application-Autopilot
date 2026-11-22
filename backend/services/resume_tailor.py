@@ -177,6 +177,25 @@ YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 CAP_WORD_RE = re.compile(r"\b([A-Z][A-Za-z0-9+#.]*[A-Za-z0-9+#]|[A-Z]{2,})\b")
 
 
+_MOJIBAKE_RE = re.compile(
+    "[ÂÃâ][\u0080-¿ŒœŠšŸŽžƒˆ˜"
+    "–-›€™]+")
+
+
+def fix_mojibake(text: str) -> str:
+    """Repair UTF-8 text that was decoded as cp1252 (e.g. 'â€“' -> an en dash). Only touches broken spans."""
+    if not text or not _MOJIBAKE_RE.search(text):
+        return text
+
+    def repl(m: "re.Match") -> str:
+        try:
+            return m.group(0).encode("cp1252").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return m.group(0)
+
+    return _MOJIBAKE_RE.sub(repl, text)
+
+
 def _normalise(text: str) -> str:
     t = (text or "").lower()
     t = t.replace("–", "-").replace("—", "-").replace("’", "'").replace(" ", " ")
@@ -187,6 +206,17 @@ def _tokens(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9+#]+(?:\.[a-z0-9]+)*", _normalise(text)))
 
 
+_STEM_SUFFIXES = ("ship", "ing", "ers", "er", "ed", "es", "s")
+
+
+def _stem(word: str) -> str:
+    """Very small stemmer (intern/internship, develop/developer/developing); only used for title phrases."""
+    for suffix in _STEM_SUFFIXES:
+        if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+            return word[: -len(suffix)]
+    return word
+
+
 class Verifier:
     """Checks tailored content against the original resume text."""
 
@@ -194,6 +224,7 @@ class Verifier:
         self.text = original_text or ""
         self.norm = _normalise(self.text)
         self.tokens = _tokens(self.text)
+        self.stems = {_stem(t) for t in self.tokens}
         self.numbers = {n.replace(",", "") for n in re.findall(r"\d+(?:[.,]\d+)?", self.text)}
 
     def _token_ok(self, token: str) -> bool:
@@ -203,7 +234,10 @@ class Verifier:
     def phrase_supported(self, phrase: str) -> bool:
         """Every significant word of the phrase appears in the resume (order not required)."""
         words = [w for w in re.findall(r"[a-z0-9+#]+(?:\.[a-z0-9]+)*", _normalise(phrase)) if w not in STOPWORDS]
-        return bool(words) and all(self._token_ok(w) for w in words)
+        # Stem matching only for phrases (titles, organisations): "Intern" is the resume's "Internship".
+        # Numbers, dates and names inside sentences keep the strict word check.
+        return bool(words) and all(self._token_ok(w) or (len(_stem(w)) >= 4 and _stem(w) in self.stems)
+                                   for w in words)
 
     def numbers_supported(self, text: str) -> tuple[bool, list[str]]:
         bad = [m.group(1) for m in NUMBER_RE.finditer(text or "") if m.group(1).replace(",", "") not in self.numbers]
@@ -651,8 +685,9 @@ def tailor_for_job(db, job, regenerate: bool = False, settings=None) -> models.T
     resume = crud.get_active_resume_for_role(db, settings.active_role)
     if resume is None or not (resume.extracted_text or "").strip():
         raise TailorError(f"No active resume with text for '{settings.active_role}'. Upload one on the Resumes page.")
-    original_text = resume.extracted_text.strip()
-    digest = profile_mod.resume_hash(original_text)
+    raw_text = resume.extracted_text.strip()
+    digest = profile_mod.resume_hash(raw_text)
+    original_text = fix_mojibake(raw_text)  # PDF text often has broken dashes/quotes; do not copy them into the new resume
 
     cached = latest(db, job.id, resume)
     if cached is not None and not regenerate and cached.status in ("tailored", "not_needed"):
@@ -677,6 +712,7 @@ def tailor_for_job(db, job, regenerate: bool = False, settings=None) -> models.T
         try:
             draft, provider = generate_structured(job, original_text, facts)
             clean, removed = verify(draft, original_text)
+            clean = type(clean).model_validate_json(fix_mojibake(clean.model_dump_json()))
             text = render_text(clean)
             scores = rescore(db, job, profile, clean, text, settings)
             row.status = "tailored"
@@ -695,6 +731,12 @@ def tailor_for_job(db, job, regenerate: bool = False, settings=None) -> models.T
                    f"(still below {limit:g}: the score measures real fit, and rewording cannot add skills you do not have).")
                 + (f" {len(removed)} unverifiable item(s) were removed." if removed else "")
             )
+            if not job.score_breakdown and job.score is not None and abs(job.score - row.score_before) >= 0.05:
+                # Jobs saved by the old (V1) pipeline carry a single AI-opinion score. The before/after
+                # numbers use the current rule-based engine so that they are comparable with each other.
+                metrics["message"] += (f" The saved score ({job.score:.1f}) is an older AI-opinion score; before and "
+                                       "after use the current rule-based scoring so they can be compared.")
+                metrics["legacy_score"] = True
             if removed:
                 logger.info(f"Tailored resume for job {job.id}: removed {len(removed)} unverifiable item(s)")
         except llm.LLMError as exc:
