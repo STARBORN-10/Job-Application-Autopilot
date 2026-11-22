@@ -27,6 +27,8 @@ The whole workflow runs **natively in the Python backend** (FastAPI + several jo
 - 📝 **Career-page form pre-fill:** for Greenhouse, Lever and Ashby postings a Playwright browser fills your details, uploads the resume, pastes the cover letter and takes a screenshot. It stops before Submit unless you explicitly enable submitting, leaves custom, legal and diversity questions to you, and hands over at a CAPTCHA.
 - ⏱️ **Live job search:** the Find New Jobs button opens a progress panel (fetch, merge, filter, score, save) with a row per source and a counter of new jobs; lists update as jobs arrive.
 - 📤 **Export:** download jobs as CSV, Excel or PDF.
+- 👤 **Accounts and privacy:** everyone signs in and sees only their own jobs, resumes, settings, applications and Telegram alerts. The first account keeps any data that existed before. A profile page holds contact details, Telegram linking, password and account deletion.
+- 🗺️ **Workflow map:** `frontend/public/workflow.html` is an interactive, n8n-style map of the whole system (nodes, connections, sources, keys and where to set them, guided walkthrough). Open it from the sidebar ("Workflow map"), at `/workflow.html` on the running site, or by double-clicking the file.
 - 🗂️ **Application tracking:** To Apply through Offer/Rejected.
 
 > Applying only happens after you approve a job, and e-mail applications are dry-run until you set `APPLY_DRY_RUN=false`. Logged-in automation on LinkedIn, Naukri or Internshala is deliberately not supported.
@@ -191,6 +193,10 @@ Then upload a resume for your active role on the **Resumes** page and click **Fi
 
 **Never upload real API keys, tokens, or credentials to GitHub.**
 
+### Run it on your own computer
+
+See **[docs/RUN_LOCALLY.md](docs/RUN_LOCALLY.md)** for copy-and-paste commands for every step, including accounts, the workflow map and Telegram.
+
 ### Run the Tests
 
 The tests are offline scripts (no live API calls; HTTP, Telegram and SMTP are mocked). From `backend/`:
@@ -344,7 +350,10 @@ Only jobs at or above your minimum match score (default 7) are saved and alerted
 
 - Secrets live in environment variables (`backend/.env` locally); they are redacted from stored errors and never returned by the API.
 - `ADMIN_API_KEY` (optional) protects approve/skip/apply, Telegram webhook registration and weight tuning. A key placed in the frontend build is readable by anyone who can load the site.
-- The Telegram webhook requires the `TELEGRAM_WEBHOOK_SECRET` header and only obeys `TELEGRAM_CHAT_ID`.
+- Accounts: passwords are salted scrypt hashes, sessions are signed tokens that end when the password changes, sign-in is rate limited, and the database session itself filters every query to the signed-in user (`backend/tenancy.py`), so no endpoint can leak another person's data. A test sweeps every route to make sure none is open without a sign-in.
+- Uploaded resume PDFs are private to their owner (they used to be publicly downloadable under `/uploads`).
+- The Telegram webhook requires the `TELEGRAM_WEBHOOK_SECRET` header; each person's taps only act on their own jobs.
+- Real e-mail applications use the server's SMTP account, so only the owner account may send them; everyone else stays in dry run.
 - The trigger endpoint has a cooldown because every run spends API quota.
 - E-mail applying is dry-run by default and capped per day; nothing is applied for without approval.
 - Scraped sources use public pages only, at low volume, and are off by default.
@@ -378,9 +387,9 @@ The React frontend can be run locally using Vite. To publish it, deploy it separ
 - [x] Live run progress (per-source status, counters, new-job highlights), top jobs by score, Excel/PDF export
 - [x] Tailored resume per job (facts verified against your resume, honest before/after score)
 - [x] Career-page form pre-fill (Greenhouse / Lever / Ashby) with Playwright; never submits by default
+- [x] Accounts: sign-in, profile and per-user data isolation
 - [ ] Gmail tracking of replies, follow-up reminders
 - [ ] Salary filtering
-- [ ] User authentication and multi-profile support
 
 ---
 

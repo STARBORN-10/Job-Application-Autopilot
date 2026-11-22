@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import BackendBanner from './components/BackendBanner';
 import ToastProvider from './context/ToastProvider';
+import AuthProvider from './context/AuthProvider';
 import PipelineProvider from './context/PipelineProvider';
 import Dashboard from './pages/Dashboard';
 import JobListings from './pages/JobListings';
@@ -12,6 +13,7 @@ import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
 import ResumeManager from './pages/ResumeManager';
 import Applications from './pages/Applications';
+import Profile from './pages/Profile';
 import './index.css';
 
 const NotFound = () => (
@@ -25,6 +27,7 @@ function App() {
   return (
     <Router>
       <ToastProvider>
+        <AuthProvider>
         <PipelineProvider>
           <div className="app-container">
             <Sidebar />
@@ -39,11 +42,13 @@ function App() {
                 <Route path="/analytics" element={<Analytics />} />
                 <Route path="/resumes" element={<ResumeManager />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/profile" element={<Profile />} />
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </main>
           </div>
         </PipelineProvider>
+        </AuthProvider>
       </ToastProvider>
     </Router>
   );

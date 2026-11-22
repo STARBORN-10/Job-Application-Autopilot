@@ -48,14 +48,14 @@ class TelegramNetworkError(TelegramNotificationError):
 # ---------------------------------------------------------------------------
 # Credential & Configuration Helpers
 # ---------------------------------------------------------------------------
-def get_telegram_credentials() -> tuple[str, str]:
+def get_telegram_credentials(chat_id: Optional[str] = None) -> tuple[str, str]:
     """
-    Safely retrieves the Telegram bot token and chat ID from environment variables.
+    Safely retrieves the Telegram bot token (and the chat ID, from `chat_id` or the environment).
     Raises TelegramConfigError if either is missing or empty.
     Never prints or logs the credentials.
     """
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id = chat_id if chat_id else os.getenv("TELEGRAM_CHAT_ID")
 
     if not token or not token.strip():
         raise TelegramConfigError(
@@ -200,13 +200,14 @@ def send_telegram_notification(
     client: Optional[httpx.Client] = None,
     parse_mode: Optional[str] = "HTML",
     reply_markup: Optional[Dict[str, Any]] = None,
+    chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Sends a message via the Telegram Bot API.
+    Sends a message via the Telegram Bot API (to `chat_id`, default TELEGRAM_CHAT_ID).
     Supports mocked httpx.Client injection for offline tests.
     If an HTML parse error occurs, gracefully falls back to plain text.
     """
-    token, chat_id = get_telegram_credentials()
+    token, chat_id = get_telegram_credentials(chat_id)
     api_url = f"{TELEGRAM_API_BASE}/bot{token}/sendMessage"
 
     payload = {
@@ -276,6 +277,7 @@ def send_job_alert(
     location: Optional[str] = None,
     client: Optional[httpx.Client] = None,
     job_id: Optional[int] = None,
+    chat_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     High-level convenience function to format and dispatch a job alert.
@@ -292,7 +294,8 @@ def send_job_alert(
         use_html=True,
     )
     markup = job_keyboard(job_id) if job_id is not None else None
-    return send_telegram_notification(formatted_msg, client=client, parse_mode="HTML", reply_markup=markup)
+    return send_telegram_notification(formatted_msg, client=client, parse_mode="HTML", reply_markup=markup,
+                                      chat_id=chat_id)
 
 
 def call_telegram(method: str, payload: Dict[str, Any], client: Optional[httpx.Client] = None,

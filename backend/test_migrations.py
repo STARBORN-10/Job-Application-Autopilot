@@ -39,7 +39,7 @@ V1_DDL = [
     "CREATE INDEX ix_app_settings_key ON app_settings (key)",
 ]
 
-HEAD = "0003_tailored_resumes"
+HEAD = "0004_users_and_ownership"
 BACKUP = Path(os.getenv("V1_BACKUP_DB", r"C:\WINDOWS\TEMP\v2_samples\jobs.db.pre-v2.bak"))
 
 
@@ -139,7 +139,7 @@ def run():
     check(_columns(v2, "tailored_resumes") == {c.name for c in models.TailoredResume.__table__.columns},
           "tailored_resumes columns match models.py")
     db_migrations.upgrade_database(v2)
-    check(db_migrations.current_revision(v2) == HEAD, "Re-running the V3 migration is a no-op")
+    check(db_migrations.current_revision(v2) == HEAD, "Re-running the migrations is a no-op")
     session = sessionmaker(bind=v2)()
     session.add(models.TailoredResume(job_id=1, resume_id=1, resume_hash="h", status="not_needed", score_before=9.1))
     session.commit()
@@ -164,6 +164,54 @@ def run():
         eng.dispose()
     else:
         print("  (skipped: set V2_DB_COPY to a COPY of a V2 database to run this check)")
+
+    check.section("8. Existing single-user database (0003) with data -> accounts added, nothing lost")
+    v3 = create_engine(f"sqlite:///{tmp / 'v3.db'}")
+    with v3.begin() as conn:
+        cfg.attributes["connection"] = conn
+        command.upgrade(cfg, "0003_tailored_resumes")
+    with v3.begin() as conn:
+        conn.exec_driver_sql("INSERT INTO jobs (title, company, url, score) VALUES ('ML Engineer', 'Acme', 'https://x/1', 8.2)")
+        conn.exec_driver_sql("INSERT INTO resumes (filename, target_role, extracted_text, file_path, is_active) "
+                             "VALUES ('cv.pdf', 'AI/ML Engineer', 'Python', 'x', 1)")
+        conn.exec_driver_sql("INSERT INTO app_settings (key, value) VALUES ('general_settings', '{\"min_match_score\": 7}')")
+        conn.exec_driver_sql("INSERT INTO app_settings (key, value) VALUES ('sources', '{}')")
+        conn.exec_driver_sql("INSERT INTO applications (job_id, method, status, dry_run) VALUES (1, 'assisted', 'ready_to_submit', 1)")
+    check("users" not in inspect(v3).get_table_names() and "user_id" not in _columns(v3, "jobs"),
+          "Starting point has no users table and no owner columns")
+    db_migrations.upgrade_database(v3)
+    check(db_migrations.current_revision(v3) == HEAD, "Single-user database upgraded to head")
+    for name in ("users", "jobs", "resumes", "app_settings", "job_decisions", "applications", "candidate_profiles", "tailored_resumes"):
+        check(_columns(v3, name) == {c.name for c in models.Base.metadata.tables[name].columns},
+              f"'{name}' columns match models.py after the accounts migration")
+    with v3.connect() as conn:
+        job = conn.execute(text("SELECT title, score, user_id FROM jobs")).fetchone()
+        settings = conn.execute(text("SELECT key, value, user_id FROM app_settings ORDER BY key")).fetchall()
+        resume = conn.execute(text("SELECT filename, user_id FROM resumes")).fetchone()
+        app_row = conn.execute(text("SELECT status, user_id FROM applications")).fetchone()
+    check(job[0] == "ML Engineer" and job[1] == 8.2 and job[2] is None, "Existing job kept, owner NULL (claimed by the first account)")
+    check(resume == ("cv.pdf", None) and app_row == ("ready_to_submit", None), "Resume and application rows kept")
+    check([(k, u) for k, _, u in settings] == [("general_settings", None), ("sources", None)]
+          and "min_match_score" in settings[0][1], "Settings copied into the per-user table, values intact")
+    with v3.begin() as conn:
+        conn.exec_driver_sql("INSERT INTO app_settings (user_id, key, value) VALUES (1, 'general_settings', '{}')")
+        conn.exec_driver_sql("INSERT INTO app_settings (user_id, key, value) VALUES (2, 'general_settings', '{}')")
+    try:
+        with v3.begin() as conn:
+            conn.exec_driver_sql("INSERT INTO app_settings (user_id, key, value) VALUES (1, 'general_settings', 'dup')")
+        dup_blocked = False
+    except Exception:
+        dup_blocked = True
+    check(dup_blocked, "The same setting twice for one user is rejected; the same key for two users is allowed")
+    db_migrations.upgrade_database(v3)
+    with v3.connect() as conn:
+        check(conn.execute(text("SELECT count(*) FROM app_settings")).scalar() == 4, "Re-running the accounts migration changes nothing")
+    session = sessionmaker(bind=v3)()
+    session.add(models.User(email="a@example.com", password_hash="x"))
+    session.commit()
+    check(session.query(models.User).count() == 1, "ORM writes to the users table")
+    session.close()
+    v3.dispose()
 
     for e in (fresh, v1):
         e.dispose()

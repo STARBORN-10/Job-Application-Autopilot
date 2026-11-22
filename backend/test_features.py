@@ -7,6 +7,7 @@ import csv
 import datetime
 import io
 import os
+os.environ["AUTH_ENABLED"] = "false"   # this suite tests the single-user mode (see test_auth.py for accounts)
 import sys
 import tempfile
 from pathlib import Path

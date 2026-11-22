@@ -3,6 +3,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 from dotenv import load_dotenv
+from fastapi import Request
 
 load_dotenv()
 
@@ -18,9 +19,17 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
 
-def get_db():
+def get_db(request: Request = None):
+    """
+    One database session per request. When the sign-in check (auth.authenticate) identified the user, the
+    session is scoped to that user: every query on user data is filtered to them (see tenancy.py).
+    """
     db = SessionLocal()
     try:
+        state = getattr(request, "state", None)
+        if state is not None and getattr(state, "tenant_set", False):
+            import tenancy
+            tenancy.set_tenant(db, state.tenant)
         yield db
     finally:
         db.close()

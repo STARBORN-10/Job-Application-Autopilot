@@ -477,3 +477,30 @@ code { font-size: 0.85em; background: #f1f5f9; padding: 0 0.25rem; border-radius
   .filter-search { flex: 1 1 100%; }
   .job-item { padding: 0.9rem; }
 }
+
+/* ------------------------------------------------------------------ Accounts: sign-in page, profile, sidebar user */
+.auth-page { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem 1rem;
+  background: linear-gradient(160deg, #eef2ff 0%, var(--bg-main) 55%); }
+.auth-card { width: 100%; max-width: 420px; padding: 1.75rem 1.6rem; box-shadow: var(--shadow-lg); }
+.auth-card.center-text { text-align: center; }
+.auth-brand { display: flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 1.15rem; margin-bottom: 1rem; }
+.auth-title { font-size: 1.45rem; font-weight: 700; margin-bottom: 0.2rem; }
+.auth-sub { margin-bottom: 1.1rem; }
+.auth-submit { width: 100%; justify-content: center; margin-top: 0.25rem; }
+.auth-switch { margin-top: 1rem; text-align: center; }
+.auth-foot { margin-top: 0.4rem; text-align: center; }
+.link-btn { background: none; border: none; color: var(--primary); cursor: pointer; font: inherit; text-decoration: underline; padding: 0; }
+.password-field { display: flex; align-items: center; gap: 0.35rem; }
+.password-field .form-control { flex: 1; min-width: 0; }
+.tg-steps { margin: 0.4rem 0 0.8rem 1.2rem; display: grid; gap: 0.45rem; }
+.tg-code { font-size: 0.95rem; padding: 0.15rem 0.45rem; user-select: all; }
+.tg-link .badge-row { align-items: center; }
+.sidebar-user { margin-top: auto; display: flex; align-items: center; gap: 0.6rem; padding: 0.85rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1); min-width: 0; }
+.avatar { width: 34px; height: 34px; flex: none; border-radius: 50%; background: var(--primary); color: #fff; font-weight: 700;
+  display: grid; place-items: center; }
+.sidebar-user-text { min-width: 0; flex: 1; }
+.sidebar-user-name { color: var(--sidebar-active); font-weight: 600; font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-user-mail { color: var(--sidebar-text); font-size: 0.74rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.signout-btn { color: var(--sidebar-text); flex: none; }
+.signout-btn:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--sidebar-active); }

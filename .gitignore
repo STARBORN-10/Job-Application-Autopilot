@@ -23,3 +23,6 @@ backend/uploads/
 # Generated files (tailored resumes, form screenshots)
 generated/
 backend/generated/
+
+# generated local session-token secret
+backend/.auth_secret

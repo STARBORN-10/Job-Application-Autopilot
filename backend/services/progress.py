@@ -16,6 +16,8 @@ import time
 import uuid
 from typing import Any, Optional
 
+import tenancy
+
 STAGES = ["starting", "fetching", "deduplicating", "filtering", "scoring", "saving", "done"]
 STAGE_LABELS = {
     "starting": "Starting",
@@ -172,4 +174,26 @@ def _public_source(entry: dict) -> dict:
     return out
 
 
-progress = RunProgress()
+class _ProgressPerUser:
+    """`progress` as the pipeline and the status endpoint use it, but one independent RunProgress per user.
+
+    Whichever user the current thread works for (tenancy.tenant_scope / the sign-in check) decides which tracker
+    every call goes to, so one person's search never shows up on, or overwrites, another person's dashboard.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._by_user: dict[str, RunProgress] = {}
+
+    def _current(self) -> RunProgress:
+        key = tenancy.current_key()
+        with self._lock:
+            if key not in self._by_user:
+                self._by_user[key] = RunProgress()
+            return self._by_user[key]
+
+    def __getattr__(self, name: str):
+        return getattr(self._current(), name)
+
+
+progress = _ProgressPerUser()

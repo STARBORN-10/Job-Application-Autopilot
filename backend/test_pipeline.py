@@ -8,6 +8,7 @@ source is enabled (its fetch is mocked) and the AI provider layer is replaced by
 
 import datetime
 import os
+os.environ["AUTH_ENABLED"] = "false"   # this suite tests the single-user mode (see test_auth.py for accounts)
 import re
 import sys
 from pathlib import Path

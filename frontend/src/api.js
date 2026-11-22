@@ -12,6 +12,19 @@ const REQUEST_TIMEOUT_MS = 60000;
 // into the frontend build is visible to anyone who loads the site, so it only keeps out casual callers.
 const ADMIN_KEY = import.meta.env.VITE_ADMIN_API_KEY || '';
 
+// ---------------------------------------------------------------------------
+// Session token (set at sign-in, sent with every request)
+// ---------------------------------------------------------------------------
+const TOKEN_KEY = 'autopilot_token';
+export const getToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; } };
+export const setToken = (token) => { try { localStorage.setItem(TOKEN_KEY, token); } catch { /* storage blocked: stay signed in for this tab only */ } };
+export const clearToken = () => { try { localStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } };
+let memoryToken = '';
+const currentToken = () => getToken() || memoryToken;
+export const rememberToken = (token) => { memoryToken = token; setToken(token); };
+export const forgetToken = () => { memoryToken = ''; clearToken(); };
+export const SESSION_EXPIRED_EVENT = 'autopilot:session-expired';
+
 // An Error with the HTTP status and, for 429, the seconds to wait.
 export class ApiError extends Error {
   constructor(message, { status = 0, kind = 'http', retryAfter = null } = {}) {
@@ -26,7 +39,19 @@ const apiFetch = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
+    const token = currentToken();
+    const headers = { ...(options.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+    const response = await fetch(url, { ...options, headers, signal: controller.signal });
+    // The server says "Please sign in." when the session is missing, expired or ended: go back to the sign-in page.
+    // (A wrong admin key is also a 401 but with a different message, and must not sign anyone out.)
+    if (response.status === 401 && token) {
+      const body = await response.clone().json().catch(() => ({}));
+      if (body.detail === 'Please sign in.') {
+        forgetToken();
+        window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+      }
+    }
+    return response;
   } catch (err) {
     if (err.name === 'AbortError') {
       throw new ApiError('The server is taking too long to respond. It may be waking up - please try again in a minute.', { kind: 'timeout' });
@@ -40,7 +65,7 @@ const apiFetch = async (url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) => {
 // Plain-language message for an error response.
 const describeStatus = (status, detail) => {
   if (detail) return detail;
-  if (status === 401) return 'Not allowed: the admin key is missing or wrong (VITE_ADMIN_API_KEY).';
+  if (status === 401) return 'Not allowed: sign in again, or the admin key is missing or wrong (VITE_ADMIN_API_KEY).';
   if (status === 404) return 'Not found.';
   if (status === 422) return 'Some values are not valid.';
   if (status === 429) return 'Too many requests: please wait a moment and try again.';
@@ -142,6 +167,17 @@ export const downloadFile = async (url, fallbackName) => {
   return name;
 };
 
+// Open a protected file (e.g. a screenshot) in a new tab. A plain link cannot send the sign-in token.
+export const openFile = async (url) => {
+  const response = await apiFetch(url, {}, 120000);
+  if (!response.ok) throw await errorFromResponse(response, 'Could not open the file.');
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const tab = window.open(objectUrl, '_blank', 'noopener');
+  if (!tab) saveBlob(blob, 'file');   // pop-up blocked: download instead
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+};
+
 export const downloadExport = (format, filters) => downloadFile(exportUrl(format, filters), `jobs.${format}`);
 
 // ---------------------------------------------------------------------------
@@ -235,3 +271,19 @@ export const prefillApplication = (jobId) =>
   request(`/jobs/${jobId}/prefill`, { method: 'POST', admin: true, fallback: 'Could not start the form pre-fill.' });
 export const fetchTask = (taskId) => request(`/tasks/${taskId}`, { timeout: 15000 });
 export const screenshotUrl = (path) => `${API_ROOT}${path}`;
+
+// ---------------------------------------------------------------------------
+// Accounts
+// ---------------------------------------------------------------------------
+export const fetchAuthConfig = () => request('/auth/config', { timeout: 20000, fallback: 'Could not reach the server.' });
+export const registerUser = (data) => request('/auth/register', { method: 'POST', body: data, fallback: 'Could not create the account.' });
+export const loginUser = (data) => request('/auth/login', { method: 'POST', body: data, fallback: 'Could not sign in.' });
+export const fetchMe = () => request('/auth/me', { fallback: 'Could not load your account.' });
+export const updateMe = (name) => request('/auth/me', { method: 'PUT', body: { name }, fallback: 'Could not save your name.' });
+export const changePassword = (current_password, new_password) =>
+  request('/auth/change-password', { method: 'POST', body: { current_password, new_password }, fallback: 'Could not change the password.' });
+export const signOutEverywhere = () => request('/auth/logout-all', { method: 'POST', fallback: 'Could not sign out other devices.' });
+export const deleteAccount = (password) =>
+  request('/auth/account', { method: 'DELETE', body: { password }, fallback: 'Could not delete the account.' });
+export const createTelegramLink = () => request('/auth/telegram/link', { method: 'POST', fallback: 'Could not start linking Telegram.' });
+export const unlinkTelegram = () => request('/auth/telegram', { method: 'DELETE', fallback: 'Could not disconnect Telegram.' });

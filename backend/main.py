@@ -15,7 +15,6 @@ import httpx
 from fastapi import FastAPI, Depends, HTTPException, Header, UploadFile, File, Form, Query, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -23,8 +22,9 @@ import PyPDF2
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
 
-import models, schemas, crud
+import auth, models, schemas, crud, tenancy
 import db_migrations
+from routes_auth import router as auth_router
 from database import SessionLocal, engine, get_db
 from security import require_admin, trigger_cooldown
 from services.pipeline import run_automation_pipeline, get_pipeline_status
@@ -64,12 +64,30 @@ ALLOWED_ROLES = [
     "Automation Engineer",
 ]
 
+def _run_scheduled_pipelines() -> None:
+    """One scheduled round: single-user mode runs once; with accounts, once for each user who has an active resume."""
+    if not tenancy.auth_enabled():
+        run_automation_pipeline(user_id=None)
+        return
+    db = tenancy.system_session(SessionLocal())
+    try:
+        user_ids = [row[0] for row in db.query(models.Resume.user_id)
+                    .filter(models.Resume.is_active == True, models.Resume.user_id.isnot(None)).distinct()]  # noqa: E712
+    finally:
+        db.close()
+    for user_id in user_ids:
+        try:
+            run_automation_pipeline(user_id=user_id)
+        except Exception:
+            logger.exception(f"Scheduled pipeline run failed for user {user_id}")
+
+
 async def _scheduler_loop(interval_minutes: float):
     """Run the automation pipeline every `interval_minutes` (first run after one interval)."""
     while True:
         await asyncio.sleep(interval_minutes * 60)
         try:
-            await asyncio.to_thread(run_automation_pipeline)
+            await asyncio.to_thread(_run_scheduled_pipelines)
         except Exception:
             logger.exception("Scheduled pipeline run failed")
 
@@ -126,7 +144,10 @@ async def lifespan(_app: FastAPI):
         poller.stop()
 
 
-app = FastAPI(title="Job Application Autopilot API", lifespan=lifespan)
+# auth.authenticate runs before every request: it identifies the signed-in user (or lets the public endpoints
+# through) and scopes the request's database session to that user.
+app = FastAPI(title="Job Application Autopilot API", lifespan=lifespan, dependencies=[Depends(auth.authenticate)])
+app.include_router(auth_router)
 
 # ---------------------------------------------------------------------------
 # CORS
@@ -152,8 +173,8 @@ app.add_middleware(
     expose_headers=["Content-Disposition", "Retry-After"],
 )
 
-# Serve uploaded PDFs (for preview / download)
-app.mount("/uploads", StaticFiles(directory=str(Path(__file__).parent / "uploads")), name="uploads")
+# Uploaded resume PDFs are NOT served as static files: they are personal documents. They are available only to
+# their owner, through GET /api/resumes/{id}/file.
 
 # ---------------------------------------------------------------------------
 # Auth helper for the legacy ingestion endpoints (POST /api/jobs, /api/make/*).
@@ -309,6 +330,7 @@ def read_job(job_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/jobs", response_model=schemas.JobResponse, dependencies=[Depends(verify_api_key)], deprecated=True)
 def create_job(job: schemas.JobCreate, db: Session = Depends(get_db)):
+    tenancy.set_tenant(db, auth.owner_user_id(db))   # legacy ingestion: protected by X-API-Key, acts on the owner
     # 1. Duplicate job detection (URL primary match, Title+Company fallback)
     duplicate = crud.find_duplicate_job(db, job)
     if duplicate:
@@ -496,6 +518,18 @@ def upload_resume(
     return db_resume
 
 
+@app.get("/api/resumes/{resume_id}/file")
+def download_resume_file(resume_id: int, db: Session = Depends(get_db)):
+    """The uploaded PDF, for its owner only (the session is scoped to the signed-in user)."""
+    resume = crud.get_resume(db, resume_id)
+    if resume is None or not resume.file_path:
+        raise HTTPException(status_code=404, detail="Resume not found")
+    path = Path(resume.file_path).resolve()
+    if not path.is_file() or UPLOAD_DIR.resolve() not in path.parents:
+        raise HTTPException(status_code=404, detail="The PDF file is no longer on the server. Upload it again.")
+    return FileResponse(str(path), media_type="application/pdf", filename=resume.filename or "resume.pdf")
+
+
 @app.put("/api/resumes/{resume_id}/role", response_model=schemas.ResumeResponse)
 def update_resume_role(
     resume_id: int,
@@ -618,6 +652,7 @@ def make_get_context(db: Session = Depends(get_db)):
     - Full experience-filter settings (max_years_experience, filter_enabled)
     Required header: X-API-Key: <MAKE_API_KEY env var>
     """
+    tenancy.set_tenant(db, auth.owner_user_id(db))   # legacy ingestion: acts on the owner account
     settings = crud.get_experience_filter_settings(db)
     active_role = settings.active_role or "AI/ML Engineer"
     db_resume = crud.get_active_resume_for_role(db, active_role)
@@ -648,6 +683,7 @@ def make_get_resume(
 
     Required header: X-API-Key: <MAKE_API_KEY env var>
     """
+    tenancy.set_tenant(db, auth.owner_user_id(db))   # legacy ingestion: acts on the owner account
     db_resume = crud.get_active_resume_for_role(db, role)
     if not db_resume:
         raise HTTPException(
@@ -700,7 +736,7 @@ def update_experience_filter(payload: schemas.ExperienceFilterSettings, db: Sess
 
 
 @app.post("/api/automation/trigger", response_model=schemas.AutomationTriggerResponse)
-def trigger_automation(background_tasks: BackgroundTasks):
+def trigger_automation(background_tasks: BackgroundTasks, request: Request):
     """
     Trigger the native Python automation pipeline in the background.
     Rate limited: one manual start per TRIGGER_COOLDOWN_SECONDS (default 120 s), because each run
@@ -723,7 +759,7 @@ def trigger_automation(background_tasks: BackgroundTasks):
     # Mark the run as starting right away, so a status poll made immediately after this response already
     # shows it (the background task may take a moment to begin).
     run_id = pipeline_progress.begin()
-    background_tasks.add_task(_run_pipeline_from_trigger)
+    background_tasks.add_task(_run_pipeline_from_trigger, auth.current_user_id(request))
     return schemas.AutomationTriggerResponse(
         status="started",
         message="Automation pipeline started.",
@@ -731,14 +767,15 @@ def trigger_automation(background_tasks: BackgroundTasks):
     )
 
 
-def _run_pipeline_from_trigger() -> None:
-    try:
-        run_automation_pipeline(progress_begun=True)
-    finally:
-        # Never leave the progress panel spinning if the run did not report its end.
-        from services import pipeline as _pipeline
-        if pipeline_progress.is_active() and not _pipeline._pipeline_lock.locked():
-            pipeline_progress.finish(False, "The run ended unexpectedly.", error="The run ended unexpectedly.")
+def _run_pipeline_from_trigger(user_id: Optional[int] = None) -> None:
+    with tenancy.tenant_scope(user_id):   # this run, its progress and its lock belong to this user only
+        try:
+            run_automation_pipeline(progress_begun=True)
+        finally:
+            # Never leave the progress panel spinning if the run did not report its end.
+            from services import pipeline as _pipeline
+            if pipeline_progress.is_active() and not _pipeline._pipeline_lock.locked():
+                pipeline_progress.finish(False, "The run ended unexpectedly.", error="The run ended unexpectedly.")
 
 
 @app.get("/api/automation/status")
@@ -1038,10 +1075,10 @@ def prefill_application(job_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str):
-    task = task_registry.get(task_id)
+    task = task_registry.get(task_id, only_mine=True)
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found (the server may have restarted).")
-    return task
+    return {k: v for k, v in task.items() if k != "owner"}
 
 
 @app.get("/api/applications/{application_id}/screenshot")
@@ -1104,7 +1141,7 @@ def list_applications(limit: int = Query(200, ge=1, le=1000), db: Session = Depe
 @app.get("/api/applications/config")
 def applications_config(db: Session = Depends(get_db)):
     """What the apply step will do: dry-run flag (banner), daily cap and whether SMTP is set up."""
-    return {"dry_run": apply_service.dry_run_enabled(), "daily_cap": apply_service.daily_cap(),
+    return {"dry_run": apply_service.dry_run_enabled(db), "daily_cap": apply_service.daily_cap(),
             "emails_today": apply_service.emails_today(db), "smtp_configured": apply_emailer.smtp_configured()}
 
 
@@ -1146,13 +1183,10 @@ async def telegram_webhook(
 
 
 def _process_telegram_update(update: dict) -> None:
-    db = SessionLocal()
     try:
-        telegram_bot.handle_update(db, update, on_approved=_on_approved)
+        telegram_bot.route_update(update, SessionLocal, on_approved=_on_approved)
     except Exception:
         logger.exception("Failed to process a Telegram update")
-    finally:
-        db.close()
 
 
 @app.post("/api/telegram/set-webhook", dependencies=[Depends(require_admin)])

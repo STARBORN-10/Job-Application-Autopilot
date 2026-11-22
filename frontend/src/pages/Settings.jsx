@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { fetchGeneralSettings, updateGeneralSettings } from '../api';
 import { useToast } from '../context/contexts';
 import SourcesSettings from '../components/SourcesSettings';
 import ScoringSettings from '../components/ScoringSettings';
-import ApplicantProfileSettings from '../components/ApplicantProfileSettings';
 import FindJobsButton from '../components/FindJobsButton';
 import PipelineProgress from '../components/PipelineProgress';
 import { ErrorState, PageLoader, Spinner } from '../components/Feedback';
@@ -149,7 +149,9 @@ const Settings = () => {
         </form>
       )}
 
-      <ApplicantProfileSettings />
+      <section className="card settings-card">
+        <p className="muted small">Your contact details for application forms, Telegram alerts and password now live on <Link to="/profile">your Profile</Link>.</p>
+      </section>
       <ScoringSettings />
       <SourcesSettings />
     </div>

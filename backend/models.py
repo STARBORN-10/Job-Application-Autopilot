@@ -3,10 +3,31 @@ SQLAlchemy models.
 
 The schema is managed by Alembic (backend/alembic). Every change here needs a matching migration;
 test_migrations.py checks that a migrated database matches these models.
+
+Ownership: Job, Resume, AppSettings, JobDecision, Application, CandidateProfile and TailoredResume carry a
+user_id. tenancy.py filters every query on them to the signed-in user and stamps new rows, so no endpoint can
+forget to scope its data. SourceHealth and ApiUsage are shared on purpose (one provider key and quota).
 """
 from sqlalchemy import Column, Integer, String, Float, Text, DateTime, Boolean, ForeignKey, UniqueConstraint
 from database import Base
 import datetime
+
+
+class User(Base):
+    """An account. Every job, resume, setting, decision and application belongs to exactly one user (user_id)."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    email = Column(String, nullable=False, unique=True, index=True)   # always stored lower-case
+    password_hash = Column(String, nullable=False)                     # scrypt, never the password itself
+    name = Column(String)
+    is_active = Column(Boolean, default=True, nullable=False)
+    token_version = Column(Integer, default=0, nullable=False)         # bump to sign the user out everywhere
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_login_at = Column(DateTime)
+    telegram_chat_id = Column(String, index=True)                      # the chat that receives this user's alerts
+    telegram_link_code = Column(String)                                # one-time code for "/start <code>" linking
+    telegram_link_expires = Column(DateTime)
 
 
 class Job(Base):
@@ -36,6 +57,7 @@ class Job(Base):
     description_quality = Column(String)         # "full" or "snippet"
     approval_status = Column(String, default="pending", server_default="pending")  # pending/approved/skipped
     last_seen = Column(DateTime)                 # last time any source returned this job
+    user_id = Column(Integer, index=True)        # owner (users.id); NULL = single-user / legacy data
 
 
 class Resume(Base):
@@ -50,13 +72,17 @@ class Resume(Base):
     is_active = Column(Boolean, default=True)          # soft-delete flag
     uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    user_id = Column(Integer, index=True)        # owner (users.id); NULL = single-user / legacy data
 
 
 class AppSettings(Base):
-    """Key-value settings store. One row per setting."""
+    """Key-value settings store. One row per (user, setting); user_id NULL = single-user / legacy."""
     __tablename__ = "app_settings"
+    __table_args__ = (UniqueConstraint("user_id", "key", name="uq_app_settings_user_key"),)
 
-    key = Column(String, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, index=True)
+    key = Column(String, nullable=False, index=True)
     value = Column(Text, nullable=False)
 
 
@@ -84,6 +110,7 @@ class JobDecision(Base):
     channel = Column(String)                             # telegram / dashboard
     score_snapshot = Column(Float)
     breakdown_snapshot = Column(Text)                    # JSON copy of jobs.score_breakdown
+    user_id = Column(Integer, index=True)        # owner (users.id); NULL = single-user / legacy data
 
 
 class Application(Base):
@@ -99,6 +126,7 @@ class Application(Base):
     error = Column(Text)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    user_id = Column(Integer, index=True)        # owner (users.id); NULL = single-user / legacy data
 
 
 class CandidateProfile(Base):
@@ -110,6 +138,7 @@ class CandidateProfile(Base):
     resume_hash = Column(String, nullable=False)
     profile_json = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    user_id = Column(Integer, index=True)        # owner (users.id); NULL = single-user / legacy data
 
 
 class ApiUsage(Base):
@@ -145,3 +174,4 @@ class TailoredResume(Base):
     provider = Column(String)
     error = Column(Text)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    user_id = Column(Integer, index=True)        # owner (users.id); NULL = single-user / legacy data
