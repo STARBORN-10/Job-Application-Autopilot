@@ -111,4 +111,10 @@ approve/skip), Applications (log, dry-run banner, copy cover letter), Tracker, A
 - Single user, no login. The trigger endpoint is open (rate limited only).
 - Resume PDFs are stored on local disk; use a persistent disk in production.
 - Scraped sources (Internshala, JobSpy) may break or be blocked, especially from cloud IPs.
-- Career-page form filling, Gmail reply tracking and tailored resumes are not built (see `docs/V2_PLAN.md`).
+- Gmail reply tracking and follow-up reminders are not built (see `docs/V2_PLAN.md`).
+- Form pre-fill needs Playwright + Chromium (`requirements-optional.txt`) and a machine that can open a browser.
+  It was tested against local fixture pages only. Real ATS pages change; expect to adjust selectors, and
+  many Greenhouse pages show a CAPTCHA that the tool cannot (and must not) solve.
+- Tailored resumes are generated from the extracted text of your PDF, not by editing the PDF, so the layout
+  is a clean ATS-friendly format rather than your original design. Text that was broken during PDF extraction is repaired.
+- Jobs saved by the V1 pipeline keep their old AI-opinion score and have no breakdown until they are re-scored.

@@ -1,6 +1,6 @@
 # Job Application Autopilot: Version 2 Plan
 
-Status: **V2.0 to V2.4 built** (November 2026) on branch `feature/v2-sources-scoring-approval`. Section 9 records what was built, what was verified live, and what is deferred. Sections 1 to 8 are the original plan and research.
+Status: **V2.0 to V2.5 built** (November 2026) on branch `feature/v2-sources-scoring-approval`. Section 9 records what was built, what was verified live, and what is deferred. Sections 1 to 8 are the original plan and research.
 
 ## 1. Where V1 stands
 
@@ -130,9 +130,16 @@ Decisions: which hosting provider for the always-on server, and the list of Indi
 - The first runs exposed two problems, both fixed: career boards kept non-engineering roles, and off-role titles ("Mechanical Engineer") could score above 7.
 - JSearch used 2 of its 200 monthly requests in total during testing.
 
+**V2.5 (built after the first user test):**
+- Live run progress: stage stepper, a row per source, counters, "new jobs" tag, final per-source summary; a running indicator on every page and a disabled button while a run is active.
+- Dashboard "Top matching opportunities" sorted by score (it used to show the newest jobs); source filter lists real sources; source badges and "Also found on".
+- Approve is explicit: a "what will happen" panel before, an application outcome and timeline after (copy cover letter, open link, download resume).
+- Tailored resume per job (score below 9): AI rewrites only what the resume already says, a verifier removes anything unverifiable, the job is re-scored before and after with the same engine, real gaps are listed. PDF and Word downloads. The 9 is a goal, not a guarantee.
+- Career-page form pre-fill (Greenhouse / Lever / Ashby, Playwright): fills the form, uploads the resume, pastes the cover letter, screenshots, never submits unless explicitly enabled, never guesses custom or legal questions. Tested against local fixture pages only; never run against a live company form.
+- Export as CSV, Excel or PDF. Make.com removed from the UI and docs (legacy endpoints kept, marked deprecated).
+
 **Deferred (not built):**
-- Career-page form filling (Greenhouse / Lever / Ashby with Playwright): these URLs are detected and routed to assisted apply.
-- Gmail tracking of replies, tailored resume per job, follow-up reminders (need Gmail OAuth).
+- Gmail tracking of replies and follow-up reminders (need Gmail OAuth).
 - Naukri and Google Jobs sources (not usable, see section 3).
 - Multi-user support and login.
 - Testing the scraped sources from a cloud IP, and the Render deployment itself (section 7).

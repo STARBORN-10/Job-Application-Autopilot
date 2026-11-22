@@ -126,15 +126,26 @@ owner's Telegram chat is obeyed. After **Approve**:
 | Everything else, including Greenhouse / Lever / Ashby career pages | "Assisted": the link and cover letter are sent to Telegram and shown on the Applications page with a copy button; you submit |
 
 Every attempt is logged with what was (or would have been) sent. Logging in as the user on Naukri,
-LinkedIn or Internshala is **deliberately excluded**. **[Deferred]** automatic career-page form filling.
+LinkedIn or Internshala is **deliberately excluded**.
+
+**Added after the first user test (V2.5):**
+- **Tailored resume:** for a job scoring below 9 the system re-orders and re-words the user's own
+  resume for that posting. Every skill, employer, title, date and number is checked against the original,
+  anything unverifiable is removed, and the job is re-scored before and after (for example 7.8 to 8.0).
+  It never invents experience, never promises a score, and lists the real gaps. PDF and Word downloads.
+- **Career-page form pre-fill** (Greenhouse, Lever, Ashby): a browser fills the user's details, uploads the
+  resume, pastes the cover letter and takes a screenshot. It stops before Submit unless submitting is
+  explicitly enabled, leaves custom and legal questions to the user, and hands over at a CAPTCHA.
+- **Live progress** when searching for jobs, an explicit "what will happen" panel on Approve, and export as
+  CSV, Excel or PDF.
 
 ### 6.4 Learning and protection (V2.4 and supporting work)
 - After 30 or more Approve/Skip decisions the system suggests new score weights from what you approved
   (each weight moves at most 5 points per step, stays between 5 and 60, total 100). Applied only on request.
 - An optional admin key protects approve, skip, apply, webhook setup and tuning; the "Find New Jobs"
   button has a 2-minute cooldown.
-- **[Deferred]** Gmail tracking of interview/rejection e-mails, a tailored resume per job, follow-up
-  reminders (they need Gmail sign-in, which is out of scope for this pass).
+- **[Deferred]** Gmail tracking of interview/rejection e-mails and follow-up reminders (they need Gmail
+  sign-in, which is out of scope for this pass).
 
 ## 7. Version 1 vs Version 2
 
@@ -182,8 +193,9 @@ A normal day with Version 2:
 | **V2.0** | Migrations, source plug-ins, new sources, de-duplication, switchable AI, trigger protection | Done |
 | **V2.1** | Explainable scoring | Done |
 | **V2.2** | Telegram Approve and Skip buttons | Done (needs `TELEGRAM_CHAT_ID` and a webhook or polling to use) |
-| **V2.3** | Safe apply methods and the application log | Done (e-mail + assisted). Career-page form filling deferred |
-| **V2.4** | Learning from decisions | Done. Gmail tracking and tailored resumes deferred |
+| **V2.3** | Safe apply methods and the application log | Done (e-mail, assisted, career-page pre-fill) |
+| **V2.4** | Learning from decisions | Done. Gmail tracking deferred |
+| **V2.5** | Live progress, tailored resume, form pre-fill, export, UI pass | Done |
 
 ## 11. Current status (for the report)
 

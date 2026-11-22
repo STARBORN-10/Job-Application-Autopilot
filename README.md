@@ -23,6 +23,10 @@ The whole workflow runs **natively in the Python backend** (FastAPI + several jo
 - 🔁 **Resilient:** retries with backoff, a run survives a failing source, the API starts even when the database is down (`/api/health`).
 - 📊 **Dashboard & Analytics:** live run results, funnel, score distribution, jobs over time, top companies and sources; filters incl. decision status; CSV export.
 - 🧩 **Resume fit & skill gaps:** one-click AI analysis of your resume against any job.
+- 📄 **Tailored resume per job:** for jobs scoring below 9 (configurable), the AI re-orders and re-words your resume for that posting. Every skill, employer, title, date and number is checked against your original, anything unverifiable is removed, and the job is re-scored with the same engine (before and after, with the real gaps). It never invents experience and never promises a score. Download as PDF or Word.
+- 📝 **Career-page form pre-fill:** for Greenhouse, Lever and Ashby postings a Playwright browser fills your details, uploads the resume, pastes the cover letter and takes a screenshot. It stops before Submit unless you explicitly enable submitting, leaves custom, legal and diversity questions to you, and hands over at a CAPTCHA.
+- ⏱️ **Live job search:** the Find New Jobs button opens a progress panel (fetch, merge, filter, score, save) with a row per source and a counter of new jobs; lists update as jobs arrive.
+- 📤 **Export:** download jobs as CSV, Excel or PDF.
 - 🗂️ **Application tracking:** To Apply through Offer/Rejected.
 
 > Applying only happens after you approve a job, and e-mail applications are dry-run until you set `APPLY_DRY_RUN=false`. Logged-in automation on LinkedIn, Naukri or Internshala is deliberately not supported.
@@ -154,6 +158,13 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+Optional (Indeed/LinkedIn scraping and career-page form filling):
+
+```bash
+pip install -r requirements-optional.txt
+playwright install chromium
+```
+
 ### 3. Configure Environment Variables
 
 Copy `backend/.env.example` to `backend/.env` and fill in your keys:
@@ -240,8 +251,8 @@ The FastAPI backend provides REST endpoints for job management.
 | GET | `/api/jobs/{id}` | Retrieve specific job details |
 | PUT | `/api/jobs/{id}` | Update job status ('Applied', 'Interview', etc.) |
 | DELETE | `/api/jobs/{id}` | Delete job record |
-| GET | `/api/make/context` | **Make.com:** Retrieve active role, resume text, and filter criteria (API key required) |
-| GET | `/api/make/resume` | **Make.com:** Retrieve resume text for a specific role (API key required) |
+| GET | `/api/make/context` | *Deprecated* legacy ingestion endpoint: active role, resume text and filters (API key required) |
+| GET | `/api/make/resume` | *Deprecated* legacy ingestion endpoint: resume text for a role (API key required) |
 | GET | `/api/resumes` | List all uploaded resumes across all roles |
 | POST | `/api/resumes` | Upload new PDF resume and associate with target role |
 | PUT | `/api/resumes/{id}/activate` | Select active resume for a specific role |
@@ -249,11 +260,12 @@ The FastAPI backend provides REST endpoints for job management.
 | GET | `/api/resumes/{id}/text` | Preview plain text extracted from a resume PDF |
 | DELETE | `/api/resumes/{id}` | Delete a resume and its PDF from disk |
 | GET | `/api/settings` | Retrieve unified job search & automation settings |
-| PUT | `/api/settings` | Update settings (roles, min score, locations, webhook URL) |
+| PUT | `/api/settings` | Update settings (roles, min score, locations, experience filters) |
 | POST | `/api/automation/trigger` | Start the pipeline in the background (`already_running` if busy; 429 within the cooldown) |
 | GET | `/api/automation/status` | Running flag, last run summary (per-source counts, merges; survives restarts) and source health |
 | GET | `/api/analytics?days=30` | Funnel, score distribution, jobs-over-time, top companies, sources |
-| GET | `/api/export/jobs.csv` | Download all jobs as CSV |
+| GET | `/api/export/jobs.{csv,xlsx,pdf}` | Download jobs as CSV, Excel or PDF |
+| GET | `/api/jobs/top` | Highest-scoring jobs first (ties: newest); hides skipped/rejected |
 | POST | `/api/jobs/{id}/analyze` | AI skill-gap analysis of the active resume vs. this job |
 | GET | `/api/health` | Liveness + database check (503 when the database is unreachable) |
 | GET | `/api/sources` | Sources with enabled / configured / experimental flags and health |
@@ -265,12 +277,18 @@ The FastAPI backend provides REST endpoints for job management.
 | POST | `/api/jobs/{id}/approve`, `/api/jobs/{id}/skip` | Decide on a job (admin key); approving starts the apply step |
 | POST | `/api/jobs/{id}/apply` | Retry applying for an approved job (admin key) |
 | GET | `/api/applications`, `/api/applications/config` | Application log; dry-run flag, daily cap, SMTP status |
+| GET | `/api/jobs/{id}/approve-preview`, `/api/jobs/{id}/timeline` | What Approve will do for this job; the job's history |
+| POST | `/api/jobs/{id}/tailor-resume` | Tailor the resume for this job (skipped at score >= 9; admin key) |
+| GET | `/api/jobs/{id}/tailored-resume`, `.pdf`, `.docx` | Tailored resume data (null if none yet) and downloads |
+| POST | `/api/jobs/{id}/prefill` | Pre-fill the Greenhouse / Lever / Ashby form; never submits by default (admin key) |
+| GET | `/api/tasks/{id}`, `/api/applications/{id}/screenshot` | Background task progress; screenshot of the pre-filled form |
+| GET / PUT | `/api/settings/applicant-profile` | Name, email, phone and links used to fill forms |
+| GET | `/api/sources/summary`, `/api/autofill/config` | Jobs per source; autofill mode and whether Playwright is installed |
 | POST | `/api/telegram/webhook` | Telegram updates (secret header required) |
 | POST | `/api/telegram/set-webhook` | Register the webhook with Telegram (admin key) |
 
 `GET /api/jobs` also accepts `approval_status=pending|approved|skipped`. "Admin key" means the `X-Admin-Key` header, required only when `ADMIN_API_KEY` is set.
 
-The Make.com guide ([docs/make_automation_guide.md](docs/make_automation_guide.md)) is kept for reference only; the native pipeline replaces it.
 For hosting and cloud persistence guidelines, see [Production Deployment Guide](docs/deployment.md).
 
 ### Example: Create a Job
@@ -357,8 +375,10 @@ The React frontend can be run locally using Vite. To publish it, deploy it separ
 - [x] Explainable scoring and AI provider fallback
 - [x] Telegram approve/skip and safe applying (e-mail dry-run, assisted)
 - [x] Weight tuning from decisions
-- [ ] Career-page form filling (Greenhouse / Lever / Ashby) via a headless browser
-- [ ] Gmail tracking of replies, tailored resumes per job, follow-up reminders
+- [x] Live run progress (per-source status, counters, new-job highlights), top jobs by score, Excel/PDF export
+- [x] Tailored resume per job (facts verified against your resume, honest before/after score)
+- [x] Career-page form pre-fill (Greenhouse / Lever / Ashby) with Playwright; never submits by default
+- [ ] Gmail tracking of replies, follow-up reminders
 - [ ] Salary filtering
 - [ ] User authentication and multi-profile support
 
