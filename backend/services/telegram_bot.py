@@ -4,8 +4,12 @@ Telegram approve / skip flow.
 Job alerts carry three buttons (Approve, Skip, Cover letter). A tap arrives as a `callback_query`
 update, either through the webhook (POST /api/telegram/webhook, verified with the
 X-Telegram-Bot-Api-Secret-Token header) or, for local development without a public URL, through a
-long-polling loop (TELEGRAM_MODE=polling). Only updates from TELEGRAM_CHAT_ID are obeyed.
-Everything degrades to a logged no-op when the bot is not configured.
+long-polling loop (TELEGRAM_MODE=polling).
+
+With accounts on, each user links their own chat (Profile page -> Connect Telegram -> send `/start <code>` to the
+bot); a tap is then handled as that user and can only touch that user's jobs. Without accounts (or for the
+server owner) the chat in TELEGRAM_CHAT_ID is obeyed, as before. Everything degrades to a logged no-op when the
+bot is not configured.
 """
 import logging
 import os
@@ -14,7 +18,9 @@ from typing import Any, Callable, Optional
 
 import httpx
 
+import auth
 import crud
+import tenancy
 from services import notification_service as tg
 from services.decisions import record_decision
 from services.scoring.writer import ensure_cover_letter
@@ -56,9 +62,12 @@ def _safe(call: Callable[[], Any], what: str) -> Any:
 
 
 def handle_update(db, update: dict, client: Optional[httpx.Client] = None,
-                  on_approved: Optional[Callable] = None) -> dict:
-    """Process one Telegram update. Returns a small dict describing what happened (for logs and tests)."""
-    allowed = configured_chat_id()
+                  on_approved: Optional[Callable] = None, allowed_chat_id: Optional[str] = None) -> dict:
+    """
+    Process one Telegram update. Returns a small dict describing what happened (for logs and tests).
+    `allowed_chat_id` is the chat of the user this session belongs to (default: TELEGRAM_CHAT_ID).
+    """
+    allowed = allowed_chat_id or configured_chat_id()
     chat_id = _chat_id_of(update)
     if not allowed:
         logger.warning(f"Telegram update from chat {chat_id} ignored: TELEGRAM_CHAT_ID is not set. "
@@ -95,7 +104,8 @@ def handle_update(db, update: dict, client: Optional[httpx.Client] = None,
         answer("Sending the cover letter" if letter else "No cover letter available")
         if letter:
             text = f"Cover letter for {job.title} at {job.company}:\n\n{letter}"
-            _safe(lambda: tg.send_telegram_notification(text, client=client, parse_mode=None), "sendMessage")
+            _safe(lambda: tg.send_telegram_notification(text, client=client, parse_mode=None, chat_id=chat_id),
+                  "sendMessage")
         return {"handled": True, "action": "cover", "job_id": job.id, "sent": bool(letter)}
 
     outcome = record_decision(db, job, ACTIONS[action], channel="telegram")
@@ -113,6 +123,47 @@ def handle_update(db, update: dict, client: Optional[httpx.Client] = None,
             "chat_id": message["chat"]["id"], "message_id": message["message_id"],
             "reply_markup": _outcome_keyboard(label, job.id)}, client), "editMessageReplyMarkup")
     return result
+
+
+def _reply(chat_id: str, text: str, client: Optional[httpx.Client]) -> None:
+    _safe(lambda: tg.send_telegram_notification(text, client=client, parse_mode=None, chat_id=chat_id), "sendMessage")
+
+
+def route_update(update: dict, session_factory, client: Optional[httpx.Client] = None,
+                 on_approved: Optional[Callable] = None) -> dict:
+    """
+    Entry point for every update (webhook and polling): find the user the chat belongs to, then handle the update
+    as that user. A `/start <code>` message from an unknown chat links it to the account that made the code.
+    """
+    chat_id = _chat_id_of(update)
+    if not chat_id or chat_id == "None":
+        return {"handled": False, "reason": "no_chat"}
+    db = session_factory()
+    try:
+        text = ((update.get("message") or {}).get("text") or "").strip()
+        if text.lower().startswith(("/start", "/link")) and tenancy.auth_enabled():
+            parts = text.split(maxsplit=1)
+            code = parts[1].strip() if len(parts) > 1 else ""
+            if code:
+                user = auth.link_telegram_chat(db, code, chat_id)
+                if user is not None:
+                    _reply(chat_id, "Linked! Job alerts for your account will arrive in this chat, with "
+                                    "Approve and Skip buttons.", client)
+                    return {"handled": True, "action": "linked", "user_id": user.id}
+                _reply(chat_id, "That code is not valid or has expired. Press Connect Telegram in your profile "
+                                "for a new one.", client)
+                return {"handled": False, "reason": "bad_link_code"}
+        found, user_id = auth.user_for_chat(db, chat_id)
+        if not found:
+            if text.lower().startswith("/start") and tenancy.auth_enabled():
+                _reply(chat_id, "Hello! To get job alerts here, open Profile in the Job Autopilot website, press "
+                                "Connect Telegram and send me the code it shows.", client)
+            return handle_update(db, update, client, on_approved) if not tenancy.auth_enabled() else                 {"handled": False, "reason": "unauthorised_chat"}
+        tenancy.set_tenant(db, user_id)
+        with tenancy.tenant_scope(user_id):
+            return handle_update(db, update, client, on_approved, allowed_chat_id=chat_id)
+    finally:
+        db.close()
 
 
 def set_webhook(base_url: str, client: Optional[httpx.Client] = None) -> dict:
@@ -146,13 +197,10 @@ class Poller:
         updates = tg.call_telegram("getUpdates", payload, self.client, timeout=timeout + 10) or []
         for update in updates:
             self.offset = int(update["update_id"]) + 1
-            db = self.session_factory()
             try:
-                handle_update(db, update, self.client, self.on_approved)
+                route_update(update, self.session_factory, self.client, self.on_approved)
             except Exception:
                 logger.exception("Failed to handle a Telegram update")
-            finally:
-                db.close()
         return len(updates)
 
     def _loop(self) -> None:

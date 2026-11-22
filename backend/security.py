@@ -6,7 +6,7 @@ Protection for expensive or dangerous endpoints.
   The trigger endpoint is NOT protected this way because the browser UI calls it.
   Note: a key placed in the frontend build (VITE_ADMIN_API_KEY) is visible to anyone who can load
   the site, so it only keeps out casual callers; keep the dashboard URL private.
-- Trigger cooldown: at most one manual pipeline start per TRIGGER_COOLDOWN_SECONDS (default 120).
+- Trigger cooldown: at most one manual pipeline start per user per TRIGGER_COOLDOWN_SECONDS (default 120).
 """
 import hmac
 import os
@@ -14,6 +14,8 @@ import threading
 import time
 
 from fastapi import Header, HTTPException
+
+import tenancy
 
 
 def admin_key_configured() -> bool:
@@ -30,12 +32,12 @@ def require_admin(x_admin_key: str | None = Header(default=None)) -> bool:
 
 
 class Cooldown:
-    """Allows one action per window; thread-safe."""
+    """Allows one action per window for each user; thread-safe."""
 
     def __init__(self, env_name: str, default_seconds: float):
         self.env_name = env_name
         self.default_seconds = default_seconds
-        self._last = None
+        self._last_by_user: dict[str, float] = {}
         self._lock = threading.Lock()
 
     def seconds(self) -> float:
@@ -46,24 +48,28 @@ class Cooldown:
 
     def try_acquire(self) -> float:
         """Return 0 and start a new window if allowed, else the seconds left to wait."""
+        key = tenancy.current_key()
         with self._lock:
             now = time.monotonic()
             window = self.seconds()
-            if self._last is not None and now - self._last < window:
-                return window - (now - self._last)
-            self._last = now
+            last = self._last_by_user.get(key)
+            if last is not None and now - last < window:
+                return window - (now - last)
+            self._last_by_user[key] = now
             return 0.0
 
     def remaining(self) -> float:
         """Seconds until the next action is allowed (0 when allowed now). Does not start a window."""
+        key = tenancy.current_key()
         with self._lock:
-            if self._last is None:
+            last = self._last_by_user.get(key)
+            if last is None:
                 return 0.0
-            return max(0.0, self.seconds() - (time.monotonic() - self._last))
+            return max(0.0, self.seconds() - (time.monotonic() - last))
 
     def reset(self) -> None:
         with self._lock:
-            self._last = None
+            self._last_by_user.clear()
 
 
 trigger_cooldown = Cooldown("TRIGGER_COOLDOWN_SECONDS", 120.0)

@@ -13,6 +13,7 @@ from typing import Optional
 
 import crud
 import models
+import tenancy
 from database import SessionLocal
 from services.apply import detect
 from services.autofill import policy, runner
@@ -74,6 +75,8 @@ def start_prefill(job_id: int, session_factory=SessionLocal, url_override: Optio
     running = tasks.active_for("autofill", job_id)
     if running:
         return running
+    # Every session this task opens (now and in its background thread) belongs to the user who started it.
+    session_factory = tenancy.scoped_factory(session_factory, tenancy.current_user_id())
     db = session_factory()
     try:
         job = crud.get_job(db, job_id)

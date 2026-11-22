@@ -32,6 +32,7 @@ def use_temp_database() -> str:
     for name in OFFLINE_BLANK_VARS:
         os.environ[name] = ""
     os.environ["APPLY_DRY_RUN"] = "true"
+    os.environ["AUTH_ENABLED"] = "false"       # existing suites test the single-user mode; test_auth.py turns accounts on
     # Never open a real career page from a test: no form pre-fill on approve, never submit, and keep
     # generated files (tailored resumes, screenshots) out of the repository.
     os.environ["AUTOFILL_ON_APPROVE"] = "false"

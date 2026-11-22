@@ -26,8 +26,10 @@ import datetime
 from collections import Counter
 from typing import Optional, Dict, Any
 
+import auth
 import crud
 import schemas
+import tenancy
 from database import SessionLocal
 from services import dedupe, geo, jsearch_service, llm, notification_service
 from services.progress import plain_source_error, progress
@@ -49,8 +51,9 @@ STATUS_SETTINGS_KEY = "pipeline_status"
 MAX_DETAILS = 300
 MAX_MERGE_RECORDS = 60
 
-# Global execution lock to prevent overlapping runs
-_pipeline_lock = threading.Lock()
+# Execution lock to prevent overlapping runs. One lock per user: two people can search at the same time, but
+# one person cannot start a second run on top of their own.
+_pipeline_lock = tenancy.TenantLock()
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +214,9 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
     active_role = settings.active_role or "AI/ML Engineer"
     min_match_score = settings.min_match_score if settings.min_match_score is not None else 7.0
     summary["active_role"] = active_role
+    # Alerts go to the chat of the user this run belongs to (single-user mode: TELEGRAM_CHAT_ID, as before).
+    alert_scoped = tenancy.tenant_of(db) is not None
+    alert_chat = auth.telegram_chat_for(db) if alert_scoped else None
 
     active_resume = crud.get_active_resume_for_role(db, active_role)
     if not active_resume or not active_resume.extracted_text or not active_resume.extracted_text.strip():
@@ -325,7 +331,7 @@ def _run(db, summary: Dict[str, Any], http_client, telegram_client, only_sources
             _per_source(summary, job.source)["saved"] += 1
             progress.saved_job(saved_job.id, saved_job.source)
             progress.message(f"Saved '{saved_job.title}' ({saved_job.score:.1f})")
-            notified = _notify(saved_job, telegram_client)
+            notified = _notify(saved_job, telegram_client, chat_id=alert_chat, scoped=alert_scoped)
             summary["notified"] += int(notified)
             _detail(summary, saved_job, "saved", job_id=saved_job.id, score=saved_job.score, notified=notified)
         except Exception as item_exc:
@@ -402,14 +408,21 @@ def _failed(summary: Dict[str, Any], db, job, exc: Exception) -> None:
         pass
 
 
-def _notify(saved_job, telegram_client) -> bool:
-    """Telegram alert, strictly after the job is committed. Failures never undo the save."""
+def _notify(saved_job, telegram_client, chat_id: Optional[str] = None, scoped: bool = False) -> bool:
+    """
+    Telegram alert, strictly after the job is committed. Failures never undo the save.
+    `chat_id` is the owning user's chat; with accounts on, a user who has not linked Telegram gets no alert.
+    """
+    if scoped and not chat_id:
+        logger.info(f"No Telegram chat linked for the user of job {saved_job.id}; alert skipped.")
+        return False
     try:
         retry_call(
             lambda: notification_service.send_job_alert(
                 title=saved_job.title, company=saved_job.company, score=saved_job.score,
                 match_reason=saved_job.match_reason, url=saved_job.url, experience=saved_job.experience,
                 location=saved_job.location, client=telegram_client, job_id=saved_job.id,
+                chat_id=chat_id,
             ),
             retry_on=_TELEGRAM_TRANSIENT,
             label="Telegram alert",
@@ -450,6 +463,8 @@ def _execute_pipeline(
             if db is None:
                 db = session_factory()
                 managed_session = True
+                if "tenant" not in db.info and not db.info.get("tenant_all"):
+                    tenancy.set_tenant(db, tenancy.current_user_id())   # the user this thread works for
             _run(db, summary, http_client, telegram_client, only_sources)
         except Exception as exc:
             logger.exception("Pipeline run failed")
@@ -477,7 +492,7 @@ def _execute_pipeline(
 # Run status tracking (exposed via GET /api/automation/status)
 # ---------------------------------------------------------------------------
 _status_lock = threading.Lock()
-_run_state: Dict[str, Any] = {"started_at": None, "finished_at": None, "last_run": None}
+_run_state = tenancy.TenantDict(lambda: {"started_at": None, "finished_at": None, "last_run": None})  # per user
 
 
 def _now_iso() -> str:
@@ -517,6 +532,9 @@ def get_pipeline_status(db: Optional[Any] = None) -> Dict[str, Any]:
     return result
 
 
+_CONTEXT_USER = object()
+
+
 def run_automation_pipeline(
     db_session: Optional[Any] = None,
     session_factory=SessionLocal,
@@ -524,11 +542,18 @@ def run_automation_pipeline(
     http_client: Optional[Any] = None,
     only_sources: Optional[list] = None,
     progress_begun: bool = False,
+    user_id: Any = _CONTEXT_USER,
 ) -> Dict[str, Any]:
     """
     Public entry point: runs the pipeline and records start/finish time and summary
     so the API/UI can report progress. See _execute_pipeline for the actual logic.
+    `user_id` is the user the run belongs to (None = single-user mode); by default the user of the current
+    request/thread is used.
     """
+    if user_id is not _CONTEXT_USER:
+        with tenancy.tenant_scope(user_id):
+            return run_automation_pipeline(db_session, session_factory, telegram_client, http_client,
+                                           only_sources, progress_begun)
     started = _now_iso()
     try:
         summary = _execute_pipeline(

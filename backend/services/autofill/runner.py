@@ -11,6 +11,7 @@ and returns a report. It submits only when policy.submit_decision() allows it (o
 Sensitive questions (EEO, visa, salary, consent, ...) and unknown custom questions are never answered.
 """
 import datetime
+import uuid
 import logging
 import re
 import tempfile
@@ -165,7 +166,7 @@ def run_prefill(url: str, ats: Optional[str], profile: ApplicantProfile, resume_
     form_url = application_url(url, ats)
     report["form_url"] = form_url
     screenshot_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]   # unique per run, even for two users at the same second
     tmp = Path(tempfile.mkdtemp(prefix="autofill_"))
 
     try:

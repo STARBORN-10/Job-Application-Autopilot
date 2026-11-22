@@ -25,7 +25,9 @@ from pathlib import Path
 from typing import Optional
 
 import crud
+import auth
 import models
+import tenancy
 from services import notification_service as tg
 from services.apply import detect, emailer
 from services.redact import redact
@@ -40,8 +42,26 @@ class NotApprovedError(Exception):
     pass
 
 
-def dry_run_enabled() -> bool:
+def can_send_real_email(db) -> bool:
+    """
+    Real e-mail goes out through the server's own SMTP account, which belongs to the owner. With accounts on,
+    only the owner account may use it; every other user stays in dry run (they would otherwise send mail
+    from someone else's address).
+    """
+    if not tenancy.auth_enabled():
+        return True
+    return tenancy.tenant_of(db) == auth.owner_user_id(db)
+
+
+def _env_dry_run() -> bool:
     return (os.getenv("APPLY_DRY_RUN") or "true").strip().lower() not in ("false", "0", "no", "off")
+
+
+def dry_run_enabled(db=None) -> bool:
+    """True when nothing may really be sent: APPLY_DRY_RUN is on (the default), or this user may not send."""
+    if _env_dry_run():
+        return True
+    return db is not None and not can_send_real_email(db)
 
 
 def daily_cap() -> int:
@@ -114,7 +134,7 @@ def resume_file(db, job) -> tuple[Optional[Path], str]:
 
 
 def _log(db, job, method: str, status: str, payload: dict, error: Optional[str] = None) -> models.Application:
-    app = models.Application(job_id=job.id, method=method, status=status, dry_run=dry_run_enabled(),
+    app = models.Application(job_id=job.id, method=method, status=status, dry_run=dry_run_enabled(db),
                              payload_summary=json.dumps(payload, default=str), error=redact(error) if error else None)
     db.add(app)
     db.commit()
@@ -149,8 +169,10 @@ def _apply_by_email(db, job, to: str, letter: Optional[str]) -> models.Applicati
         return _log(db, job, "email", "failed", payload, "Active resume PDF not found on disk.")
     if emails_today(db) >= daily_cap():
         return _log(db, job, "email", "skipped", payload, f"Daily cap of {daily_cap()} e-mail applications reached.")
-    if dry_run_enabled():
+    if dry_run_enabled(db):
         payload["body_preview"] = letter[:300]
+        if not can_send_real_email(db):
+            payload["note"] = "Real e-mail sending is limited to the server owner's account, so this stayed a dry run."
         return _log(db, job, "email", "dry_run", payload)
     try:
         emailer.send_email(to, subject, letter, path)
@@ -167,11 +189,12 @@ def _apply_assisted(db, job, info: dict, letter: Optional[str], telegram_client)
     path, kind = resume_file(db, job)
     payload = {**info, "cover_letter_chars": len(letter or ""), "telegram_sent": False,
                "resume_file": path.name if path else None, "resume_kind": kind}
-    if (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() and (os.getenv("TELEGRAM_CHAT_ID") or "").strip():
+    chat = auth.telegram_chat_for(db)
+    if (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() and chat:
         text = (f"Ready to submit: {job.title} at {job.company}\n{job.url or '(no link)'}\n\n{info['note']}"
                 + (f"\n\nCover letter:\n{letter}" if letter else ""))
         try:
-            tg.send_telegram_notification(text, client=telegram_client, parse_mode=None)
+            tg.send_telegram_notification(text, client=telegram_client, parse_mode=None, chat_id=chat)
             payload["telegram_sent"] = True
         except tg.TelegramNotificationError as exc:
             payload["telegram_error"] = redact(str(exc))[:200]
@@ -224,7 +247,7 @@ def preview(db, job) -> dict:
     from services import llm, resume_tailor
     from services.autofill import policy as autofill_policy, runner as autofill_runner
     method, info = choose_method(job)
-    dry = dry_run_enabled()
+    dry = dry_run_enabled(db)
     previous = existing_application(db, job.id)
     ats = info.get("ats") if method == "assisted" else detect.ats_provider(job.url)
     autofill_possible = ats in AUTOFILL_ATS
@@ -256,14 +279,15 @@ def preview(db, job) -> dict:
                  else "Cover letter: one is written now by the AI (if a provider is available).")
     if method == "email":
         if dry:
-            steps.append(f"E-mail: an application to {info['to']} is prepared and logged but NOT sent (dry run is on).")
+            reason = "dry run is on" if _env_dry_run() else "real sending is limited to the server owner's account"
+            steps.append(f"E-mail: an application to {info['to']} is prepared and logged but NOT sent ({reason}).")
         elif not emailer.smtp_configured():
             steps.append(f"E-mail to {info['to']}: SMTP is not configured, so it will fail and be logged.")
         else:
             steps.append(f"E-mail: your cover letter and resume are SENT to {info['to']} (dry run is off). "
                          f"Daily cap {daily_cap()}, used today {emails_today(db)}.")
     else:
-        telegram = bool((os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() and (os.getenv("TELEGRAM_CHAT_ID") or "").strip())
+        telegram = bool((os.getenv("TELEGRAM_BOT_TOKEN") or "").strip() and auth.telegram_chat_for(db))
         steps.append("Assisted apply: the link and cover letter are prepared for you to submit yourself"
                      + (" (and sent to Telegram)." if telegram else "."))
         if autofill_possible:
