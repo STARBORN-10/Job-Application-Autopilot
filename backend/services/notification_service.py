@@ -184,10 +184,22 @@ def format_job_alert(
 # ---------------------------------------------------------------------------
 # Notification Dispatcher
 # ---------------------------------------------------------------------------
+def job_keyboard(job_id: int) -> Dict[str, Any]:
+    """Inline buttons under a job alert. Taps arrive as callback queries (see services/telegram_bot.py)."""
+    return {
+        "inline_keyboard": [
+            [{"text": "Approve", "callback_data": f"approve:{job_id}"},
+             {"text": "Skip", "callback_data": f"skip:{job_id}"}],
+            [{"text": "Cover letter", "callback_data": f"cover:{job_id}"}],
+        ]
+    }
+
+
 def send_telegram_notification(
     message: str,
     client: Optional[httpx.Client] = None,
     parse_mode: Optional[str] = "HTML",
+    reply_markup: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Sends a message via the Telegram Bot API.
@@ -203,6 +215,8 @@ def send_telegram_notification(
     }
     if parse_mode:
         payload["parse_mode"] = parse_mode
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
 
     logger.info(f"Dispatching Telegram notification to chat_id '{chat_id}'")
 
@@ -261,9 +275,11 @@ def send_job_alert(
     experience: Optional[str] = None,
     location: Optional[str] = None,
     client: Optional[httpx.Client] = None,
+    job_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     High-level convenience function to format and dispatch a job alert.
+    With a job_id the alert carries Approve / Skip / Cover letter buttons.
     """
     formatted_msg = format_job_alert(
         title=title,
@@ -275,5 +291,39 @@ def send_job_alert(
         location=location,
         use_html=True,
     )
-    return send_telegram_notification(formatted_msg, client=client, parse_mode="HTML")
+    markup = job_keyboard(job_id) if job_id is not None else None
+    return send_telegram_notification(formatted_msg, client=client, parse_mode="HTML", reply_markup=markup)
+
+
+def call_telegram(method: str, payload: Dict[str, Any], client: Optional[httpx.Client] = None,
+                  timeout: float = DEFAULT_TIMEOUT_SECONDS) -> Any:
+    """
+    Generic Bot API call (answerCallbackQuery, editMessageReplyMarkup, setWebhook, getUpdates, ...).
+    Returns the `result` field; raises the same errors as send_telegram_notification. Needs only the bot token.
+    """
+    token = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
+    if not token:
+        raise TelegramConfigError("TELEGRAM_BOT_TOKEN is not configured in environment variables.")
+    url = f"{TELEGRAM_API_BASE}/bot{token}/{method}"
+    try:
+        if client is not None:
+            response = client.post(url, json=payload, timeout=timeout)
+        else:
+            with httpx.Client() as c:
+                response = c.post(url, json=payload, timeout=timeout)
+    except httpx.TimeoutException:
+        raise TelegramNetworkError(f"Telegram {method} timed out")
+    except httpx.RequestError as exc:
+        raise TelegramNetworkError(f"Telegram {method} connection failed ({type(exc).__name__})")
+    if response.status_code in (401, 404):
+        raise TelegramAuthError("Telegram authentication failed. Verify TELEGRAM_BOT_TOKEN is valid.")
+    if response.status_code == 429:
+        raise TelegramRateLimitError(f"Telegram rate limit reached on {method}")
+    try:
+        data = response.json()
+    except ValueError:
+        raise TelegramNotificationError(f"Telegram {method} returned non-JSON (HTTP {response.status_code})")
+    if response.status_code >= 400 or not data.get("ok"):
+        raise TelegramNotificationError(f"Telegram {method} failed: {str(data.get('description'))[:200]}")
+    return data.get("result")
 

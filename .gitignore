@@ -19,3 +19,7 @@ jobs.db
 uploads/
 backend/uploads/
 *.pdf
+
+# Generated files (tailored resumes, form screenshots)
+generated/
+backend/generated/

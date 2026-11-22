@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { fetchAnalytics } from '../api';
+import { fetchAnalytics, fetchSourcesSummary } from '../api';
+import { ErrorState, PageLoader } from '../components/Feedback';
+import { sourceKey, sourceLabel } from '../lib/format';
 import { Briefcase, Star, Send, TrendingUp } from 'lucide-react';
 
 const STATUS_COLORS = {
@@ -19,7 +21,7 @@ const BarList = ({ rows, colorFor }) => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
       {rows.map(r => (
         <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <div style={{ width: 110, fontSize: '0.85rem', color: 'var(--text-muted)', flexShrink: 0 }}>{r.label}</div>
+          <div className="bar-label" title={r.label}>{r.label}</div>
           <div style={BAR_TRACK}>
             <div style={{
               width: `${(r.count / max) * 100}%`, height: '100%',
@@ -61,21 +63,32 @@ const Timeline = ({ points }) => {
 const Analytics = () => {
   const [data, setData] = useState(null);
   const [days, setDays] = useState(30);
+  const [source, setSource] = useState('');
+  const [sources, setSources] = useState([]);
   const [error, setError] = useState(null);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    fetchAnalytics(days)
+    fetchSourcesSummary()
+      .then((list) => { if (!cancelled) setSources(list.filter((s) => (s.seen ?? s.jobs) > 0)); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAnalytics(days, source)
       .then(d => { if (!cancelled) { setData(d); setError(null); } })
       .catch(err => { if (!cancelled) setError(err.message); });
     return () => { cancelled = true; };
-  }, [days]);
+  }, [days, source, reload]);
 
-  if (error) {
-    return <div className="card" style={{ color: 'var(--danger)' }}>Could not load analytics: {error}</div>;
+  if (error && !data) {
+    return <ErrorState title="Could not load analytics" message={error} onRetry={() => setReload((n) => n + 1)} />;
   }
   if (!data) {
-    return <div className="loader-container"><div className="spinner"></div></div>;
+    return <PageLoader label="Loading analytics" />;
   }
 
   const stat = (label, value, Icon, color) => (
@@ -90,17 +103,24 @@ const Analytics = () => {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem', marginBottom: '1.5rem' }}>
-        <header className="page-header" style={{ margin: 0 }}>
+      <div className="page-head">
+        <div className="page-head-text">
           <h1 className="page-title">Analytics</h1>
-          <p className="page-description">How your job search is progressing.</p>
-        </header>
-        <select className="form-control" style={{ width: 'auto' }} value={days} onChange={e => setDays(Number(e.target.value))}>
-          <option value={7}>Last 7 days</option>
-          <option value={30}>Last 30 days</option>
-          <option value={90}>Last 90 days</option>
-        </select>
+          <p className="page-description">How your job search is progressing{source ? ` (jobs found on ${sourceLabel(source)})` : ''}.</p>
+        </div>
+        <div className="btn-group">
+          <select className="form-control select-auto" value={source} onChange={e => setSource(e.target.value)} aria-label="Source">
+            <option value="">All sources</option>
+            {sources.map((s) => <option key={s.name} value={sourceKey(s.name)}>{sourceLabel(s.name)} ({s.seen ?? s.jobs})</option>)}
+          </select>
+          <select className="form-control select-auto" value={days} onChange={e => setDays(Number(e.target.value))} aria-label="Time range">
+            <option value={7}>Last 7 days</option>
+            <option value={30}>Last 30 days</option>
+            <option value={90}>Last 90 days</option>
+          </select>
+        </div>
       </div>
+      {error && <ErrorState title="Could not refresh analytics" message={error} compact onRetry={() => setReload((n) => n + 1)} />}
 
       <div className="grid-stats">
         {stat('Total Jobs', data.total_jobs, Briefcase, 'var(--primary)')}
@@ -114,7 +134,7 @@ const Analytics = () => {
           <p className="text-muted">No jobs yet. Run “Find New Jobs” on the Dashboard to start collecting data.</p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.5rem', marginTop: '1.5rem' }}>
+        <div className="analytics-grid">
           <div className="card">
             <h3 className="card-title">Application Funnel</h3>
             <BarList
@@ -142,8 +162,9 @@ const Analytics = () => {
           </div>
 
           <div className="card">
-            <h3 className="card-title">Sources</h3>
-            <BarList rows={data.sources.map(s => ({ label: s.source, count: s.count }))} />
+            <h3 className="card-title">Jobs per source</h3>
+            <BarList rows={data.sources.map(s => ({ label: sourceLabel(s.source), count: s.count }))} />
+            <p className="small muted" style={{ marginTop: '0.75rem' }}>By the source each job was first saved from. Jobs merged from several sources count once.</p>
           </div>
         </div>
       )}

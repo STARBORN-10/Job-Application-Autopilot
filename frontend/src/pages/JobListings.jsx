@@ -1,218 +1,195 @@
-import React, { useEffect, useState } from 'react';
-import { fetchJobs, updateJob, EXPORT_CSV_URL } from '../api';
-import { Link } from 'react-router-dom';
-import { Search, MapPin, Download } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Search, MapPin, X } from 'lucide-react';
+import { fetchJobs, fetchSourcesSummary } from '../api';
+import { usePipeline } from '../context/contexts';
+import JobCard from '../components/JobCard';
+import ExportMenu from '../components/ExportMenu';
+import FindJobsButton from '../components/FindJobsButton';
+import PipelineProgress from '../components/PipelineProgress';
+import { ErrorState, PageLoader } from '../components/Feedback';
+import { parseDate, sourceKey, sourceLabel, TRACKER_STATUSES } from '../lib/format';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const PAGE = 40;
+const DEFAULTS = { search: '', score: 'all', status: 'all', exp: 'all', location: '', source: 'all', approval: 'all',
+  date: 'all', sort: 'newest', onlyNew: false };
+
+const isFresher = (exp) => {
+  const e = (exp || '').toLowerCase();
+  return !exp || /fresh|entry|intern|graduate|trainee|0\s*-|0 to|\b1 (year|yr)/.test(e);
+};
+const isExperienced = (exp) => /\b([2-9]|\d{2})\s*\+|\b([2-9]|\d{2})\s*(-|to)\s*\d+|\b([2-9]|\d{2})\s*(years?|yrs?)/i.test(exp || '');
 
 const JobListings = () => {
+  const { jobsVersion, newJobIds } = usePipeline();
   const [jobs, setJobs] = useState([]);
+  const [sources, setSources] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [filterScore, setFilterScore] = useState('all');
-  const [filterStatus, setFilterStatus] = useState('all');
-  const [filterExp, setFilterExp] = useState('all');
-  const [filterLocation, setFilterLocation] = useState('');
-  const [filterSource, setFilterSource] = useState('all');
-  const [filterDate, setFilterDate] = useState('all');
-  const [sortBy, setSortBy] = useState('newest');
-  const [now] = useState(() => Date.now()); // fixed at mount; keeps render pure
+  const [error, setError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [f, setF] = useState(DEFAULTS);
+  const [shown, setShown] = useState(PAGE);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    const loadJobs = async () => {
-      try {
-        const data = await fetchJobs();
+    let cancelled = false;
+    Promise.all([fetchJobs(), fetchSourcesSummary().catch(() => [])])
+      .then(([data, srcs]) => {
+        if (cancelled) return;
         setJobs(data);
-      } catch (err) {
-        console.error("Failed to fetch jobs", err);
-      } finally {
-        setLoading(false);
+        setSources(srcs);
+        setError(null);
+        setNow(Date.now());
+      })
+      .catch((err) => { if (!cancelled) setError(err.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [reloadKey, jobsVersion]);
+
+  const set = (key) => (e) => { setF((prev) => ({ ...prev, [key]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })); setShown(PAGE); };
+  const replaceJob = (updated) => setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
+
+  // Every source that exists (registered or found in the data), with job counts.
+  const sourceOptions = useMemo(() => {
+    const byKey = new Map();
+    sources.forEach((s) => byKey.set(sourceKey(s.name), { key: sourceKey(s.name), seen: s.seen ?? s.jobs ?? 0 }));
+    jobs.forEach((j) => { const k = sourceKey(j.source); if (!byKey.has(k)) byKey.set(k, { key: k, seen: 0 }); });
+    return [...byKey.values()].sort((a, b) => b.seen - a.seen || sourceLabel(a.key).localeCompare(sourceLabel(b.key)));
+  }, [sources, jobs]);
+
+  const filtered = useMemo(() => {
+    const term = f.search.trim().toLowerCase();
+    const loc = f.location.trim().toLowerCase();
+    return jobs.filter((job) => {
+      if (term && !`${job.title} ${job.company}`.toLowerCase().includes(term)) return false;
+      const s = job.score;
+      if (f.score === 'high' && !(s >= 8)) return false;
+      if (f.score === 'medium' && !(s >= 6 && s < 8)) return false;
+      if (f.score === 'low' && !(s < 6)) return false;
+      if (f.status !== 'all' && (job.status || 'To Apply') !== f.status) return false;
+      if (f.exp === 'fresher' && !isFresher(job.experience)) return false;
+      if (f.exp === 'experienced' && !isExperienced(job.experience)) return false;
+      if (loc && !(job.location || '').toLowerCase().includes(loc)) return false;
+      if (f.source !== 'all') {
+        const names = new Set([sourceKey(job.source), ...(job.source_names || []).map(sourceKey)]);
+        if (!names.has(f.source)) return false;
       }
-    };
-    loadJobs();
-  }, []);
+      if (f.approval !== 'all' && (job.approval_status || 'pending') !== f.approval) return false;
+      if (f.date !== 'all') {
+        const found = parseDate(job.date_found);
+        if (!found || now - found.getTime() > Number(f.date) * DAY_MS) return false;
+      }
+      if (f.onlyNew && !newJobIds.has(job.id)) return false;
+      return true;
+    }).sort((a, b) => {
+      if (f.sort === 'score') return (b.score ?? -1) - (a.score ?? -1) || b.id - a.id;
+      if (f.sort === 'company') return (a.company || '').localeCompare(b.company || '');
+      return b.id - a.id;
+    });
+  }, [jobs, f, newJobIds, now]);
 
-  const handleApply = async (job) => {
-    try {
-      const updated = await updateJob(job.id, { status: 'Applied' });
-      setJobs(jobs.map(j => j.id === updated.id ? updated : j));
-    } catch (e) {
-      console.error(e);
-    }
+  if (loading) return <PageLoader label="Loading jobs" />;
+
+  const exportFilters = {
+    status: f.status, source: f.source, approval_status: f.approval,
+    min_score: f.score === 'high' ? 8 : undefined,
   };
-
-  const filteredJobs = jobs.filter(job => {
-    const matchesSearch = job.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          job.company.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesScore = filterScore === 'all' || 
-                         (filterScore === 'high' && job.score >= 8) || 
-                         (filterScore === 'medium' && job.score >= 5 && job.score < 8) || 
-                         (filterScore === 'low' && job.score < 5);
-    const matchesStatus = filterStatus === 'all' || job.status === filterStatus;
-    const expLow = (job.experience || '').toLowerCase();
-    const matchesExp = filterExp === 'all' ||
-                       (filterExp === 'fresher' && (
-                         !job.experience || expLow.includes('fresh') || expLow.includes('entry') || expLow.includes('intern') || expLow.includes('0-') || expLow.includes('0 to') || expLow.includes('1 year') || expLow.includes('1 yr')
-                       )) ||
-                       (filterExp === 'experienced' && (
-                         expLow.includes('2+') || expLow.includes('3') || expLow.includes('4') || expLow.includes('5')
-                       ));
-    const matchesLocation = !filterLocation.trim() ||
-                            (job.location || '').toLowerCase().includes(filterLocation.trim().toLowerCase());
-    const matchesSource = filterSource === 'all' || (job.source || 'Unknown') === filterSource;
-    const matchesDate = filterDate === 'all' ||
-                        (job.date_found && now - new Date(job.date_found).getTime() <= Number(filterDate) * DAY_MS);
-
-    return matchesSearch && matchesScore && matchesStatus && matchesExp && matchesLocation && matchesSource && matchesDate;
-  }).sort((a, b) => {
-    if (sortBy === 'score') return (b.score || 0) - (a.score || 0);
-    if (sortBy === 'company') return (a.company || '').localeCompare(b.company || '');
-    return new Date(b.date_found || 0) - new Date(a.date_found || 0);
-  });
-
-  const sources = [...new Set(jobs.map(j => j.source || 'Unknown'))].sort();
-
-  if (loading) {
-    return (
-      <div className="loader-container">
-        <div className="spinner"></div>
-      </div>
-    );
-  }
+  const active = Object.keys(DEFAULTS).filter((k) => k !== 'sort' && f[k] !== DEFAULTS[k]).length;
 
   return (
     <div>
-      <header className="page-header">
-        <h1 className="page-title">Job Listings</h1>
-        <p className="page-description">Review discovered jobs and generated applications.</p>
-      </header>
-
-      <div className="card" style={{ marginBottom: '1.5rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: '250px', position: 'relative' }}>
-          <Search size={18} style={{ position: 'absolute', left: '10px', top: '12px', color: 'var(--text-muted)' }} />
-          <input 
-            type="text" 
-            className="form-control" 
-            placeholder="Search title or company..." 
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            style={{ paddingLeft: '35px' }}
-          />
+      <div className="page-head">
+        <div className="page-head-text">
+          <h1 className="page-title">Job Listings</h1>
+          <p className="page-description">Every job found for you. Open one to see its score breakdown, cover letter and resume.</p>
         </div>
-        <select 
-          className="form-control" 
-          style={{ width: 'auto' }} 
-          value={filterScore} 
-          onChange={e => setFilterScore(e.target.value)}
-        >
-          <option value="all">All Scores</option>
-          <option value="high">High Match (&ge; 8)</option>
-          <option value="medium">Medium Match (5 - 7.9)</option>
-          <option value="low">Low Match (&lt; 5)</option>
+        <FindJobsButton />
+      </div>
+
+      <PipelineProgress compact />
+      {error && <ErrorState title="Could not load jobs" message={error} onRetry={() => setReloadKey((k) => k + 1)} />}
+
+      <div className="card filters" role="search">
+        <div className="filter-search">
+          <Search size={17} aria-hidden="true" />
+          <input type="search" className="form-control" placeholder="Search title or company..." value={f.search}
+            onChange={set('search')} aria-label="Search title or company" />
+        </div>
+        <select className="form-control" value={f.score} onChange={set('score')} aria-label="Score">
+          <option value="all">All scores</option>
+          <option value="high">High (8 and up)</option>
+          <option value="medium">Medium (6 - 7.9)</option>
+          <option value="low">Low (under 6)</option>
         </select>
-        <select 
-          className="form-control" 
-          style={{ width: 'auto' }} 
-          value={filterExp} 
-          onChange={e => setFilterExp(e.target.value)}
-        >
-          <option value="all">All Experience</option>
-          <option value="fresher">Fresher &amp; Entry (0-1 yrs)</option>
+        <select className="form-control" value={f.source} onChange={set('source')} aria-label="Source">
+          <option value="all">All sources</option>
+          {sourceOptions.map((s) => <option key={s.key} value={s.key}>{sourceLabel(s.key)} ({s.seen})</option>)}
+        </select>
+        <select className="form-control" value={f.approval} onChange={set('approval')} aria-label="Decision">
+          <option value="all">Any decision</option>
+          <option value="pending">Awaiting decision</option>
+          <option value="approved">Approved</option>
+          <option value="skipped">Not interested</option>
+        </select>
+        <select className="form-control" value={f.status} onChange={set('status')} aria-label="Tracker status">
+          <option value="all">Any tracker status</option>
+          {TRACKER_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <select className="form-control" value={f.exp} onChange={set('exp')} aria-label="Experience">
+          <option value="all">Any experience</option>
+          <option value="fresher">Fresher / entry (0-1 yrs)</option>
           <option value="experienced">Experienced (2+ yrs)</option>
         </select>
-        <select 
-          className="form-control" 
-          style={{ width: 'auto' }}
-          value={filterStatus}
-          onChange={e => setFilterStatus(e.target.value)}
-        >
-          <option value="all">All Statuses</option>
-          <option value="To Apply">To Apply</option>
-          <option value="Applied">Applied</option>
-          <option value="Interview">Interview</option>
-          <option value="Rejected">Rejected</option>
-          <option value="Offer">Offer</option>
-        </select>
-
-        <div style={{ flex: '0 1 180px', minWidth: '140px', position: 'relative' }}>
-          <MapPin size={16} style={{ position: 'absolute', left: '10px', top: '13px', color: 'var(--text-muted)' }} />
-          <input
-            type="text"
-            className="form-control"
-            placeholder="Location..."
-            value={filterLocation}
-            onChange={e => setFilterLocation(e.target.value)}
-            style={{ paddingLeft: '32px' }}
-          />
+        <div className="filter-search">
+          <MapPin size={16} aria-hidden="true" />
+          <input type="text" className="form-control" placeholder="Location..." value={f.location} onChange={set('location')}
+            aria-label="Location" />
         </div>
-        <select className="form-control" style={{ width: 'auto' }} value={filterSource} onChange={e => setFilterSource(e.target.value)}>
-          <option value="all">All Sources</option>
-          {sources.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select className="form-control" style={{ width: 'auto' }} value={filterDate} onChange={e => setFilterDate(e.target.value)}>
-          <option value="all">Any Date</option>
-          <option value="1">Last 24 hours</option>
+        <select className="form-control" value={f.date} onChange={set('date')} aria-label="Found">
+          <option value="all">Any date</option>
+          <option value="1">Found in the last 24 hours</option>
           <option value="7">Last 7 days</option>
           <option value="30">Last 30 days</option>
         </select>
-        <select className="form-control" style={{ width: 'auto' }} value={sortBy} onChange={e => setSortBy(e.target.value)}>
-          <option value="newest">Sort: Newest</option>
-          <option value="score">Sort: Best Match</option>
-          <option value="company">Sort: Company A-Z</option>
+        <select className="form-control" value={f.sort} onChange={set('sort')} aria-label="Sort">
+          <option value="newest">Sort: newest</option>
+          <option value="score">Sort: best match</option>
+          <option value="company">Sort: company A-Z</option>
         </select>
+        <label className="check-label">
+          <input type="checkbox" checked={f.onlyNew} onChange={set('onlyNew')} /> Only new from the latest search
+        </label>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-        <span className="text-muted" style={{ fontSize: '0.875rem' }}>
-          Showing {filteredJobs.length} of {jobs.length} jobs
+      <div className="list-toolbar">
+        <span className="muted small">
+          Showing {Math.min(shown, filtered.length)} of {filtered.length} matching ({jobs.length} total)
+          {active > 0 && (
+            <button type="button" className="link-btn" onClick={() => { setF(DEFAULTS); setShown(PAGE); }}>
+              <X size={13} /> Clear {active} filter{active === 1 ? '' : 's'}
+            </button>
+          )}
         </span>
-        <a href={EXPORT_CSV_URL} className="btn btn-outline" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}>
-          <Download size={15} /> Export CSV
-        </a>
+        <ExportMenu filters={exportFilters} />
       </div>
 
       <div className="job-list">
-        {filteredJobs.length === 0 ? (
-          <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
-            <p className="text-muted">No jobs found matching your criteria.</p>
+        {filtered.length === 0 ? (
+          <div className="card empty-state">
+            <p><strong>No jobs match these filters.</strong></p>
+            <p className="muted small">{jobs.length ? 'Try clearing a filter.' : 'Click Find New Jobs to start a search.'}</p>
           </div>
-        ) : (
-          filteredJobs.map(job => (
-            <div key={job.id} className="job-item card" style={{ padding: '1.5rem' }}>
-              <div className="job-info">
-                <h3 style={{ marginBottom: '0.5rem' }}>{job.title}</h3>
-                <div className="job-meta" style={{ marginBottom: '1rem' }}>
-                  <span>{job.company}</span>
-                  <span>•</span>
-                  <span>{job.location}</span>
-                  <span>•</span>
-                  <span>{job.job_type}</span>
-                  <span>•</span>
-                  <span>Score: <strong className={`score-${job.score >= 8 ? 'high' : job.score >= 5 ? 'medium' : 'low'}`}>{job.score}/10</strong></span>
-                </div>
-                <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                  {job.match_reason}
-                </p>
-                <div>
-                   <span className={`badge badge-${job.status === 'Applied' ? 'primary' : job.status === 'To Apply' ? 'warning' : 'neutral'}`}>
-                     {job.status}
-                   </span>
-                </div>
-              </div>
-              <div className="job-actions" style={{ flexDirection: 'column', gap: '0.5rem', minWidth: '120px' }}>
-                {job.status === 'To Apply' && (
-                  <button className="btn btn-primary" onClick={() => handleApply(job)}>
-                    Mark Applied
-                  </button>
-                )}
-                <Link to={`/jobs/${job.id}`} className="btn btn-outline">
-                  View Details
-                </Link>
-              </div>
-            </div>
-          ))
-        )}
+        ) : filtered.slice(0, shown).map((job) => (
+          <JobCard key={job.id} job={job} isNew={newJobIds.has(job.id)} onChange={replaceJob} />
+        ))}
       </div>
+      {shown < filtered.length && (
+        <div className="center-row">
+          <button type="button" className="btn btn-outline" onClick={() => setShown((n) => n + PAGE)}>
+            Show {Math.min(PAGE, filtered.length - shown)} more
+          </button>
+        </div>
+      )}
     </div>
   );
 };

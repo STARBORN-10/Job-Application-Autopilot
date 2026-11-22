@@ -237,19 +237,27 @@ def evaluate_job(
     return parse_and_validate_ai_response(raw_response_text)
 
 
-def _generate_json_text(prompt: str, response_schema: Any, model_name: str, client: Optional[Any] = None) -> str:
+def _generate_json_text(
+    prompt: str,
+    response_schema: Any,
+    model_name: str,
+    client: Optional[Any] = None,
+    system_instruction: str = SYSTEM_INSTRUCTION,
+    temperature: float = DEFAULT_TEMPERATURE,
+) -> str:
     """
     Calls Gemini for a JSON response and returns the raw text.
     Maps SDK/network failures onto the AIError hierarchy (rate limit, auth, timeout).
+    Also used by the V2 provider layer (services/llm/gemini.py).
     """
     try:
         active_client = client if client is not None else genai.Client(api_key=get_gemini_api_key())
 
         config = types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=system_instruction,
             response_mime_type="application/json",
             response_schema=response_schema,
-            temperature=DEFAULT_TEMPERATURE,
+            temperature=temperature,
         )
 
         response = active_client.models.generate_content(

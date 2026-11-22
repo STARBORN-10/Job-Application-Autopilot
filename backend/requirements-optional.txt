@@ -1,0 +1,10 @@
+# Optional extras. Not needed for a normal deployment.
+#
+# Indeed + LinkedIn source (experimental, off by default). Pulls pandas and a TLS client.
+# Verified to install on Python 3.13 with the pinned versions in requirements.txt.
+python-jobspy==1.5.0
+#
+# Career-page form filling (Greenhouse / Lever / Ashby). After installing, download the browser once:
+#   python -m playwright install chromium
+# Without Playwright the app still runs; "Pre-fill application form" then explains how to install it.
+playwright==1.65.2

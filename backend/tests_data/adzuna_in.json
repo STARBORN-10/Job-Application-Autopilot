@@ -1,0 +1,181 @@
+{
+ "count": 4884,
+ "results": [
+  {
+   "redirect_url": "https://www.adzuna.in/details/4686702979?utm_medium=api&utm_source=fixture",
+   "__CLASS__": "Adzuna::API::Response::Job",
+   "longitude": 79.63795,
+   "latitude": 17.97765,
+   "location": {
+    "__CLASS__": "Adzuna::API::Response::Location",
+    "display_name": "Warangal, Telangana",
+    "area": [
+     "India",
+     "Telangana",
+     "Warangal"
+    ]
+   },
+   "id": "4686702979",
+   "salary_is_predicted": "0",
+   "title": "Python Developer",
+   "created": "2024-05-10T07:38:36Z",
+   "category": {
+    "label": "IT Jobs",
+    "tag": "it-jobs",
+    "__CLASS__": "Adzuna::API::Response::Category"
+   },
+   "description": "Python Developer Job Description: Python Developer duties and responsibilities: -Write reusable, testable, and efficient code -Design and implement of low-latency, high-availability, and performance applications -Integration of user-facing elements developed by front-end developers with server side logic -Implementation of security and data protection -Integration of data storage solutions -Performance tuning, improvement, balancing, usability, automation -Work collaboratively with design team …",
+   "company": {
+    "__CLASS__": "Adzuna::API::Response::Company"
+   }
+  },
+  {
+   "category": {
+    "label": "IT Jobs",
+    "tag": "it-jobs",
+    "__CLASS__": "Adzuna::API::Response::Category"
+   },
+   "created": "2026-11-15T09:34:19Z",
+   "description": "Job Description – Python Developer Position: Python Developer Experience: 4–5 Years Location: Hyderabad Employment Type: Full-Time Job Summary We are looking for a skilled Python Developer with 4–5 years of experience in designing, developing, and maintaining scalable applications using Python. The ideal candidate should have strong programming fundamentals, experience in developing REST APIs, and hands-on exposure to CI/CD pipelines, automation, and DevOps practices. The candidate will be resp…",
+   "salary_min": 1200000,
+   "id": "5966478742",
+   "location": {
+    "display_name": "Hyderabad, Telangana",
+    "area": [
+     "India",
+     "Telangana",
+     "Hyderabad"
+    ],
+    "__CLASS__": "Adzuna::API::Response::Location"
+   },
+   "latitude": 17.40275,
+   "__CLASS__": "Adzuna::API::Response::Job",
+   "contract_type": "permanent",
+   "company": {
+    "__CLASS__": "Adzuna::API::Response::Company",
+    "display_name": "Blumetra"
+   },
+   "title": "Python Developer",
+   "salary_is_predicted": "0",
+   "contract_time": "full_time",
+   "salary_max": 2000000,
+   "redirect_url": "https://www.adzuna.in/details/5966478742?utm_medium=api&utm_source=fixture",
+   "longitude": 78.50806
+  },
+  {
+   "salary_is_predicted": "0",
+   "category": {
+    "__CLASS__": "Adzuna::API::Response::Category",
+    "tag": "it-jobs",
+    "label": "IT Jobs"
+   },
+   "created": "2026-11-20T02:42:57Z",
+   "contract_type": "contract",
+   "description": "Experience: 2–4 Years Job Title: Python Developer Employment Type: Full-Time Job Summary We are looking for a skilled Python Developer with 2–4 years of experience in designing, developing, and maintaining scalable applications. The ideal candidate should have strong Python programming skills, experience with backend development, REST APIs, databases, and a good understanding of software development best practices. Requirements Key Responsibilities Design, develop, test, and maintain applicatio…",
+   "company": {
+    "__CLASS__": "Adzuna::API::Response::Company",
+    "display_name": "Theomnihire"
+   },
+   "title": "Python Developer",
+   "location": {
+    "__CLASS__": "Adzuna::API::Response::Location",
+    "area": [
+     "India",
+     "Tamil Nadu",
+     "Chennai",
+     "Nungambakkam"
+    ],
+    "display_name": "Nungambakkam, Chennai"
+   },
+   "latitude": 13.06019,
+   "__CLASS__": "Adzuna::API::Response::Job",
+   "redirect_url": "https://www.adzuna.in/details/5972097783?utm_medium=api&utm_source=fixture",
+   "longitude": 80.23349,
+   "id": "5972097783",
+   "contract_time": "full_time"
+  },
+  {
+   "title": "Python Developer",
+   "created": "2026-10-07T17:36:34Z",
+   "category": {
+    "label": "IT Jobs",
+    "tag": "it-jobs",
+    "__CLASS__": "Adzuna::API::Response::Category"
+   },
+   "company": {
+    "display_name": "Stafio.ai",
+    "__CLASS__": "Adzuna::API::Response::Company"
+   },
+   "description": "Stafio.ai is a forward-thinking technology company specializing in artificial intelligence solutions that drive innovation across various industries. We are currently seeking a talented and motivated Python Developer to join our dynamic team. The ideal candidate will play a critical role in designing, developing, and maintaining cutting-edge AI applications and services that power our products. This position offers an excellent opportunity to work in a collaborative environment where creativity…",
+   "salary_is_predicted": "0",
+   "contract_time": "full_time",
+   "id": "5916983421",
+   "__CLASS__": "Adzuna::API::Response::Job",
+   "redirect_url": "https://www.adzuna.in/details/5916983421?utm_medium=api&utm_source=fixture",
+   "location": {
+    "__CLASS__": "Adzuna::API::Response::Location",
+    "display_name": "India",
+    "area": [
+     "India"
+    ]
+   }
+  },
+  {
+   "title": "Python Developer",
+   "created": "2024-05-10T07:39:10Z",
+   "category": {
+    "__CLASS__": "Adzuna::API::Response::Category",
+    "tag": "it-jobs",
+    "label": "IT Jobs"
+   },
+   "company": {
+    "__CLASS__": "Adzuna::API::Response::Company"
+   },
+   "description": "Blue Bird Solutions is a technology consulting and services company, helping enterprises in solving complex technology challenges with cutting edge technologies. We specialize in niche hard to find skills in technologies including Mobile Development, Big Data Analytics, Data Sciences, Cyber Security, IoT, Cloud, Machine Learning, DevOps, Data Base and Artificial Intelligence. Blue Bird has the following opportunity for our on-going engagement on Full Time basis Position Title: Python Developer …",
+   "salary_is_predicted": "0",
+   "id": "4686707565",
+   "redirect_url": "https://www.adzuna.in/details/4686707565?utm_medium=api&utm_source=fixture",
+   "__CLASS__": "Adzuna::API::Response::Job",
+   "longitude": 78.50806,
+   "latitude": 17.40275,
+   "location": {
+    "__CLASS__": "Adzuna::API::Response::Location",
+    "area": [
+     "India",
+     "Telangana",
+     "Hyderabad"
+    ],
+    "display_name": "Hyderabad, Telangana"
+   }
+  },
+  {
+   "contract_time": "full_time",
+   "id": "5947460424",
+   "__CLASS__": "Adzuna::API::Response::Job",
+   "redirect_url": "https://www.adzuna.in/details/5947460424?utm_medium=api&utm_source=fixture",
+   "location": {
+    "area": [
+     "India"
+    ],
+    "display_name": "India",
+    "__CLASS__": "Adzuna::API::Response::Location"
+   },
+   "salary_max": 1300000,
+   "title": "Python Developer",
+   "description": "About the Role We’re looking for a curious and driven Python Developer to join our fast-growing team at Heads Up For Tails. You’ll play a key role in building and evolving our in-house ERP systems that power everyday business operations from supply chain to customer experience. In this role, you’ll work across the full development lifecycle designing, building, and improving backend systems, while also exploring opportunities to bring in automation and AI-driven enhancements. You’ll collaborate…",
+   "company": {
+    "display_name": "Heads Up For Tails",
+    "__CLASS__": "Adzuna::API::Response::Company"
+   },
+   "created": "2026-10-31T07:52:09Z",
+   "contract_type": "permanent",
+   "category": {
+    "tag": "it-jobs",
+    "label": "IT Jobs",
+    "__CLASS__": "Adzuna::API::Response::Category"
+   },
+   "salary_is_predicted": "0",
+   "salary_min": 1000000
+  }
+ ]
+}

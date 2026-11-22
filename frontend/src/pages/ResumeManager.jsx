@@ -239,10 +239,10 @@ const ExperienceFilterCard = () => {
         Experience Filter
       </h2>
       <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-        Make.com will use the active role's resume and apply this filter when evaluating jobs.
+        The job search scores jobs against the active resume of this role and skips jobs asking for more experience.
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+      <div className="form-grid">
         <div className="form-group" style={{ margin: 0 }}>
           <label className="form-label">Active Role for Matching</label>
           <div style={{ position: 'relative' }}>
@@ -257,7 +257,7 @@ const ExperienceFilterCard = () => {
             <ChevronDown size={16} style={{ position: 'absolute', right: '0.75rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }} />
           </div>
           <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-            Resume for this role is sent to Make.com for AI matching.
+            Jobs are searched for and scored against this role's active resume.
           </p>
         </div>
 
@@ -389,7 +389,7 @@ const ResumeRow = ({ resume, onDelete, onReplace, onRoleChange, onActivate, onVi
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', width: '100%', flexWrap: 'wrap', gap: '0.75rem' }}>
         {/* Left: file info */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1, minWidth: 240 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: '1 1 200px', minWidth: 0 }}>
           <div style={{
             width: 44, height: 44, flexShrink: 0,
             background: resume.is_active ? 'rgba(16,185,129,0.1)' : 'rgba(79,70,229,0.08)',
@@ -400,7 +400,7 @@ const ResumeRow = ({ resume, onDelete, onReplace, onRoleChange, onActivate, onVi
           </div>
           <div style={{ minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <span style={{ fontWeight: 600, fontSize: '0.95rem' }}>
+              <span style={{ fontWeight: 600, fontSize: '0.95rem', overflowWrap: 'anywhere' }}>
                 {resume.filename}
               </span>
               {resume.is_active ? (
@@ -439,7 +439,7 @@ const ResumeRow = ({ resume, onDelete, onReplace, onRoleChange, onActivate, onVi
           <button
             className="btn btn-outline"
             onClick={() => onViewText(resume)}
-            title="Inspect extracted text that AI receives"
+            title="See the text read from this PDF"
             style={{ padding: '0.4rem 0.65rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
           >
             <Eye size={13} /> View Text
@@ -514,19 +514,15 @@ const ResumeManager = () => {
     setTimeout(() => setStatusToast(''), 3000);
   };
 
-  const load = async () => {
-    setLoading(true);
-    try {
-      const data = await fetchResumes();
-      setResumes(data);
-    } catch {
-      setFetchError('Could not load resumes. Make sure the backend is running.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { load(); }, []);
+  const [reloadKey, setReloadKey] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    fetchResumes()
+      .then((data) => { if (!cancelled) { setResumes(data); setFetchError(''); } })
+      .catch((err) => { if (!cancelled) setFetchError(`Could not load resumes: ${err.message}`); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [reloadKey]);
 
   const handleUploaded = (newResume) => {
     // When a new resume is uploaded, mark any previous ones for that role as inactive
@@ -600,7 +596,7 @@ const ResumeManager = () => {
       <header className="page-header">
         <h1 className="page-title">Resume Manager</h1>
         <p className="page-description">
-          Upload and manage tailored resumes for each target role. The active resume for your chosen role is automatically sent to Make.com and Google Gemini for AI job matching and cover letter generation.
+          Upload a resume (PDF) for each target role. The active resume of your chosen role is used to score jobs, write cover letters and create a tailored version for each job you approve.
         </p>
       </header>
 
@@ -640,6 +636,7 @@ const ResumeManager = () => {
         {fetchError && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--danger)', fontSize: '0.875rem', marginBottom: '1rem' }}>
             <AlertCircle size={16} /> {fetchError}
+            <button type="button" className="btn btn-outline btn-sm" onClick={() => { setLoading(true); setReloadKey((k) => k + 1); }}>Try again</button>
           </div>
         )}
 
@@ -733,7 +730,7 @@ const ResumeManager = () => {
 
             <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                This is the exact plain text sent to Google Gemini for candidate-job matching and personalized cover letters.
+                This is the text read from your PDF. Scoring, cover letters and tailored resumes only use this text; if it looks garbled, export the PDF again from your editor.
               </span>
               <button className="btn btn-primary" onClick={() => setPreviewResume(null)}>
                 Close Preview
@@ -743,23 +740,6 @@ const ResumeManager = () => {
         </div>
       )}
 
-      {/* Make.com integration info */}
-      <div className="card" style={{ marginTop: '2rem', borderLeft: '4px solid var(--primary)', background: 'rgba(79,70,229,0.03)' }}>
-        <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '1rem' }}>
-          Make.com Integration Endpoints
-        </h2>
-        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-          Make.com securely queries your active target role, extracted resume text, and experience filter rules in a single call:
-        </p>
-        <div style={{ background: 'var(--sidebar-bg)', color: '#e2e8f0', borderRadius: 'var(--radius-md)', padding: '1rem', fontFamily: 'monospace', fontSize: '0.82rem', overflowX: 'auto' }}>
-          <div style={{ color: '#94a3b8', marginBottom: '0.5rem' }}>// 1. Unified Context Endpoint (Role, Resume Text & Experience Settings)</div>
-          <div><span style={{ color: '#7dd3fc' }}>GET</span> <span style={{ color: '#6ee7b7' }}>http://YOUR_SERVER:8000/api/make/context</span></div>
-          <div style={{ marginTop: '0.75rem', color: '#94a3b8' }}>// 2. Specific Role Resume Endpoint</div>
-          <div><span style={{ color: '#7dd3fc' }}>GET</span> <span style={{ color: '#6ee7b7' }}>http://YOUR_SERVER:8000/api/make/resume?role=AI%2FML+Engineer</span></div>
-          <div style={{ marginTop: '0.75rem', color: '#94a3b8' }}>// Required Header for all Make.com endpoints:</div>
-          <div><span style={{ color: '#fca5a5' }}>X-API-Key</span>: <span style={{ color: '#fde68a' }}>your-secret-key-from-MAKE_API_KEY-env-var</span></div>
-        </div>
-      </div>
     </div>
   );
 };

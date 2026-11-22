@@ -187,13 +187,14 @@ def run():
     import main as _main
     attempts = {"n": 0}
 
-    def flaky_create_all(*a, **k):
+    def flaky_upgrade(*a, **k):
         attempts["n"] += 1
         if attempts["n"] < 3:
             raise RuntimeError("db paused")
 
     async def run_init():
-        with patch.object(_main.models.Base.metadata, "create_all", side_effect=flaky_create_all):
+        # V2: startup runs Alembic migrations (db_migrations.upgrade_database) instead of create_all.
+        with patch.object(_main.db_migrations, "upgrade_database", side_effect=flaky_upgrade):
             await asyncio.wait_for(_main._init_db_with_retry(retry_seconds=0.01), timeout=5)
 
     asyncio.run(run_init())

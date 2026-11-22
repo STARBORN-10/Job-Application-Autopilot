@@ -1,0 +1,49 @@
+<!doctype html>
+<!-- Local test fixture imitating an Ashby "/application" page: the form is rendered by script after load. -->
+<html lang="en">
+<head><meta charset="utf-8"><title>Data Analyst @ Fixture Co</title></head>
+<body>
+<div id="root">Loading...</div>
+<script>
+  setTimeout(function () {
+    document.getElementById('root').innerHTML = `
+    <form class="ashby-application-form" action="/submit/ashby" method="post">
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="_systemfield_name">Name<span>*</span></label>
+        <input id="_systemfield_name" name="_systemfield_name" type="text" required>
+      </div>
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="_systemfield_email">Email<span>*</span></label>
+        <input id="_systemfield_email" name="_systemfield_email" type="email" required>
+      </div>
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="phone-q">Phone</label>
+        <input id="phone-q" name="2f1c-phone" type="tel">
+      </div>
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="loc-q">Location</label>
+        <input id="loc-q" name="2f1c-loc" type="text" placeholder="Start typing...">
+      </div>
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="li-q">LinkedIn Profile</label>
+        <input id="li-q" name="2f1c-li" type="text">
+      </div>
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="_systemfield_resume">Resume<span>*</span></label>
+        <input id="_systemfield_resume" name="_systemfield_resume" type="file" required>
+      </div>
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title">Are you legally authorized to work in India?<span>*</span></label>
+        <label><input type="radio" name="auth" value="yes" required> Yes</label>
+        <label><input type="radio" name="auth" value="no"> No</label>
+      </div>
+      <div class="ashby-application-form-field-entry">
+        <label class="ashby-application-form-question-title" for="hear-q">How did you hear about us?</label>
+        <input id="hear-q" name="2f1c-hear" type="text">
+      </div>
+      <button type="submit" class="ashby-application-form-submit-button">Submit Application</button>
+    </form>`;
+  }, 300);
+</script>
+</body>
+</html>

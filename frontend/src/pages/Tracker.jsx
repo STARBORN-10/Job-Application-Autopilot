@@ -1,90 +1,92 @@
 import React, { useEffect, useState } from 'react';
-import { fetchJobs, updateJob } from '../api';
 import { Link } from 'react-router-dom';
+import { fetchJobs, updateJob } from '../api';
+import { usePipeline, useToast } from '../context/contexts';
+import { DecisionBadge, ScoreBadge, SourceBadge } from '../components/Badges';
+import { ErrorState, PageLoader } from '../components/Feedback';
+import { TRACKER_STATUSES } from '../lib/format';
 
 const Tracker = () => {
+  const { notify } = useToast();
+  const { jobsVersion } = usePipeline();
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [reload, setReload] = useState(0);
+  const [hideSkipped, setHideSkipped] = useState(true);
+  const [saving, setSaving] = useState(null);
 
   useEffect(() => {
-    const loadJobs = async () => {
-      try {
-        const data = await fetchJobs();
-        setJobs(data);
-      } catch (err) {
-        console.error(err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadJobs();
-  }, []);
+    let cancelled = false;
+    fetchJobs()
+      .then((data) => { if (!cancelled) { setJobs(data); setError(null); } })
+      .catch((err) => { if (!cancelled) setError(err.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [reload, jobsVersion]);
 
-  const handleStatusChange = async (id, newStatus) => {
+  const handleStatusChange = async (job, status) => {
+    setSaving(job.id);
     try {
-      const updated = await updateJob(id, { status: newStatus });
-      setJobs(jobs.map(j => j.id === updated.id ? updated : j));
+      const updated = await updateJob(job.id, { status });
+      setJobs((prev) => prev.map((j) => (j.id === updated.id ? updated : j)));
     } catch (err) {
-      console.error(err);
+      notify({ type: 'error', title: 'Could not move the job', message: err.message });
+    } finally {
+      setSaving(null);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="loader-container">
-        <div className="spinner"></div>
-      </div>
-    );
-  }
+  if (loading) return <PageLoader label="Loading your tracker" />;
 
-  const columns = ['To Apply', 'Applied', 'Interview', 'Offer', 'Rejected'];
+  const visible = jobs.filter((j) => !(hideSkipped && j.approval_status === 'skipped' && (j.status || 'To Apply') === 'To Apply'));
 
   return (
     <div>
-      <header className="page-header">
-        <h1 className="page-title">Application Tracker</h1>
-        <p className="page-description">Manage your job application pipeline.</p>
-      </header>
+      <div className="page-head">
+        <div className="page-head-text">
+          <h1 className="page-title">Application tracker</h1>
+          <p className="page-description">
+            Your own progress for each job. Approving prepares an application; a sent e-mail moves the job to Applied
+            automatically, everything else you move here yourself.
+          </p>
+        </div>
+        <label className="check-label">
+          <input type="checkbox" checked={hideSkipped} onChange={(e) => setHideSkipped(e.target.checked)} />
+          Hide "Not interested" jobs
+        </label>
+      </div>
+      {error && <ErrorState title="Could not load jobs" message={error} onRetry={() => setReload((n) => n + 1)} />}
 
       <div className="kanban-board">
-        {columns.map(col => {
-          const colJobs = jobs.filter(j => j.status === col);
+        {TRACKER_STATUSES.map((col) => {
+          const colJobs = visible.filter((j) => (j.status || 'To Apply') === col);
           return (
-            <div key={col} className="kanban-column">
+            <section key={col} className="kanban-column" aria-label={col}>
               <div className="kanban-header">
                 {col} <span className="badge badge-neutral">{colJobs.length}</span>
               </div>
               <div className="kanban-cards">
-                {colJobs.map(job => (
+                {colJobs.map((job) => (
                   <div key={job.id} className="kanban-card">
-                    <div style={{ fontWeight: '600', marginBottom: '0.25rem' }}>
-                      <Link to={`/jobs/${job.id}`} style={{ color: 'inherit', textDecoration: 'none' }}>
-                        {job.title}
-                      </Link>
+                    <div className="kanban-title">
+                      <Link to={`/jobs/${job.id}`}>{job.title}</Link>
+                      <ScoreBadge score={job.score} size="sm" />
                     </div>
-                    <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-                      {job.company}
+                    <div className="muted small kanban-company">{job.company}</div>
+                    <div className="badge-row">
+                      <SourceBadge source={job.source} url={job.url} />
+                      {job.approval_status !== 'pending' && <DecisionBadge status={job.approval_status} />}
                     </div>
-                    
-                    <select 
-                      className="form-control" 
-                      style={{ padding: '0.25rem', fontSize: '0.75rem' }}
-                      value={job.status}
-                      onChange={(e) => handleStatusChange(job.id, e.target.value)}
-                    >
-                      {columns.map(c => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
+                    <select className="form-control form-control-sm" value={job.status || 'To Apply'} disabled={saving === job.id}
+                      onChange={(e) => handleStatusChange(job, e.target.value)} aria-label={`Status of ${job.title}`}>
+                      {TRACKER_STATUSES.map((c) => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                 ))}
-                {colJobs.length === 0 && (
-                  <div style={{ textAlign: 'center', padding: '1rem', color: 'var(--text-muted)', fontSize: '0.875rem', fontStyle: 'italic' }}>
-                    No jobs
-                  </div>
-                )}
+                {colJobs.length === 0 && <div className="kanban-empty">No jobs</div>}
               </div>
-            </div>
+            </section>
           );
         })}
       </div>
