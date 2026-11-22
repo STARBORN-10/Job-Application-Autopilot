@@ -401,17 +401,21 @@ var N = [
    f:[['Setting','Minimum score in Settings'],['Cover letter','Written by the AI provider layer']],
    env:[], code:['backend/services/pipeline.py','backend/services/ai_service.py'] },
  { id:'save', cat:'storage', n:12, ico:'💾', t:'Database', s:'SQLite locally, Postgres online', x:2810, y:360, st:'built',
-   d:'Everything is stored here: jobs with their score breakdown, resumes, settings, source health, your decisions, applications, tailored resumes and API usage. Schema changes are applied automatically at startup by Alembic migrations.',
-   f:[['Local','SQLite file (backend/jobs.db)'],['Online','Postgres (Neon, Supabase or Render)'],['Migrations','Alembic, safe on existing data']],
+   d:'Everything is stored here: jobs with their score breakdown, resumes, settings, source health, your decisions, applications, tailored resumes and API usage. Every row of personal data belongs to one user and the database session filters on it automatically, so nobody can read another person\u2019s rows. Schema changes are applied automatically at startup by Alembic migrations.',
+   f:[['Local','SQLite file (backend/jobs.db)'],['Online','Postgres (Neon, Supabase or Render)'],['Privacy','Per-user rows, filtered centrally (tenancy.py)'],['Migrations','Alembic, safe on existing data']],
    env:['DATABASE_URL'], code:['backend/models.py','backend/database.py','backend/alembic/'] },
 
  // notify, decide, apply
- { id:'telegram', cat:'notify', n:13, ico:'📬', t:'Telegram alert', s:'Approve, Skip, Cover letter', x:2810, y:860, st:'built', tag:'chat ID pending',
-   d:'Each good job is sent to your Telegram with three buttons. Taps arrive through a webhook (checked with a secret) or, on your own computer, through polling. Only your own chat is obeyed. Built and tested offline; it goes live once the chat ID is set.',
-   f:[['Bot','Created with @BotFather'],['Chat ID','Your own chat, set in TELEGRAM_CHAT_ID'],['Modes','Webhook online, polling locally']],
-   env:['TELEGRAM_BOT_TOKEN','TELEGRAM_CHAT_ID','TELEGRAM_WEBHOOK_SECRET','TELEGRAM_MODE','PUBLIC_BACKEND_URL'], code:['backend/services/telegram_bot.py','backend/services/notification_service.py'] },
+ { id:'telegram', cat:'notify', n:13, ico:'📬', t:'Telegram alert', s:'Approve, Skip, Cover letter', x:2810, y:860, st:'built', 
+   d:'Each good job is sent to your own Telegram chat with three buttons. Everyone links their own chat from Profile (Connect Telegram, then send the bot a one-time code), and a tap can only act on that person\u2019s jobs. Taps arrive through a webhook (checked with a secret) or, on your own computer, through polling.',
+   f:[['Bot','Created with @BotFather, shared by all users'],['Linking','Profile page, Connect Telegram, send /start <code>'],['Owner','TELEGRAM_CHAT_ID still works for the owner account'],['Modes','Webhook online, polling locally']],
+   env:['TELEGRAM_BOT_TOKEN','TELEGRAM_BOT_USERNAME','TELEGRAM_CHAT_ID','TELEGRAM_WEBHOOK_SECRET','TELEGRAM_MODE','PUBLIC_BACKEND_URL'], code:['backend/services/telegram_bot.py','backend/services/notification_service.py','backend/auth.py'] },
+ { id:'auth', cat:'process', n:13, ico:'\uD83D\uDD11', t:'Sign-in and accounts', s:'Every user sees only their own data', x:3060, y:360, st:'built',
+   d:'Everyone has an account (e-mail and password). After signing in, the website sends a signed session token with every request. The server checks it before anything else, and then limits every database query to that person\u2019s own rows. A user can never read, change or delete another user\u2019s jobs, resumes, settings or applications. Passwords are stored as salted hashes, sign-in attempts are rate limited, and a password change signs other devices out.',
+   f:[['Sign up','Open by default; ALLOW_SIGNUP and SIGNUP_CODE can close it or require an invite code'],['Session','Signed token, 7 days, ends when the password changes'],['First account','Takes over the data that existed before accounts (or OWNER_EMAIL)'],['Profile','Name, contact details, Telegram link, password, delete account'],['Real e-mail','Only the owner account may send through the server\u2019s mail account']],
+   env:['AUTH_ENABLED','AUTH_SECRET','AUTH_TOKEN_DAYS','ALLOW_SIGNUP','SIGNUP_CODE','OWNER_EMAIL'], code:['backend/auth.py','backend/tenancy.py','backend/routes_auth.py','frontend/src/pages/Auth.jsx','frontend/src/pages/Profile.jsx'] },
  { id:'dashboard', cat:'ui', n:13, ico:'🖥️', t:'Dashboard', s:'React website on Vercel', x:3060, y:610, st:'built',
-   d:'The website you use every day: live search progress and top matches, job list with filters and source badges, job pages with score breakdown, resume and application status, tracker, applications log, analytics, resumes, settings, and export to CSV, Excel or PDF.',
+   d:'The website you use every day: live search progress and top matches, job list with filters and source badges, job pages with score breakdown, resume and application status, tracker, applications log, analytics, resumes, settings, your profile, and export to CSV, Excel or PDF.',
    f:[['Pages','Dashboard, Job Listings, Job Details, Tracker, Applications, Analytics, Resumes, Settings'],['Talks to','The backend through VITE_API_URL']],
    env:['VITE_API_URL','VITE_ADMIN_API_KEY'], code:['frontend/src/'] },
  { id:'decision', cat:'notify', n:14, ico:'👍', t:'Your decision', s:'Approve or Skip', x:2560, y:860, st:'built',
@@ -480,6 +484,7 @@ var E = [
  ['profile','prescore','your skills'],['prescore','aifacts','top jobs'],['llm','aifacts','extract facts'],['aifacts','score','facts'],['profile','score'],
  ['score','threshold'],['llm','threshold','cover letter'],['threshold','save','save'],
  ['save','telegram','alert'],['save','dashboard','read'],['telegram','decision','tap'],['dashboard','decision','click'],
+ ['dashboard','auth','sign in'],['auth','save','only your rows'],
  ['decision','tailor','Approve'],['llm','tailor','rewrite'],['tailor','router'],
  ['router','email'],['router','assist'],['router','prefill'],
  ['email','applog'],['assist','applog'],['prefill','applog'],
@@ -510,8 +515,8 @@ var STEPS = [
    p:'The same job found on two sources becomes one. Jobs you already have are skipped without cost. Jobs that can never fit (too senior, wrong place, blocked company) are removed before any AI is used.' },
  { t:'It scores every job, and explains the score', x:['profile','prescore','aifacts','llm','score','threshold'],
    p:'A quick keyword pass ranks everything. The best jobs go to an AI that only extracts facts. The score itself is arithmetic over five weighted parts, so it can always be explained. Jobs below your minimum are dropped and the rest get a cover letter.' },
- { t:'It saves and tells you', x:['threshold','save','telegram','dashboard'],
-   p:'Good jobs are saved with their full breakdown. Telegram sends you a message with Approve, Skip and Cover letter buttons, and the dashboard shows the same jobs with filters and source badges.' },
+ { t:'It saves and tells you', x:['threshold','save','auth','telegram','dashboard'],
+   p:'Good jobs are saved under your own account, with their full breakdown. Nobody else can see them. Telegram sends you a message with Approve, Skip and Cover letter buttons, and the dashboard shows the same jobs with filters and source badges.' },
  { t:'You decide', x:['telegram','dashboard','decision'],
    p:'Nothing is applied for until you approve. The dashboard shows exactly what Approve will do for that job before you confirm.' },
  { t:'It tailors your resume and applies the safe way', x:['decision','tailor','llm','router','email','assist','prefill','applog'],
@@ -534,6 +539,12 @@ var K = [
  ['b','Telegram mode and URL','TELEGRAM_MODE, PUBLIC_BACKEND_URL','polling for local use; the public backend address for the webhook','opt','Backend','',''],
  ['b','Database','DATABASE_URL','Where data lives. Leave unset locally for SQLite. Use Postgres online','rec','Backend','Neon, Supabase and Render have free Postgres','neon.tech, supabase.com'],
  ['b','Allowed website','FRONTEND_URL, CORS_ORIGINS','Which website may call the backend (CORS). Unset means every origin','opt','Backend','',''],
+ ['b','Accounts on or off','AUTH_ENABLED','true (default) = people sign in and see only their own data. false = single-user mode with no sign-in','rec','Backend','',''],
+ ['b','Session secret','AUTH_SECRET','Signs the session tokens. Use a long random string online; without it everyone is signed out when the server resets','yes','Backend','','python -c "import secrets; print(secrets.token_urlsafe(48))"'],
+ ['b','Session length','AUTH_TOKEN_DAYS','How many days a sign-in lasts (default 7)','opt','Backend','',''],
+ ['b','Who may sign up','ALLOW_SIGNUP, SIGNUP_CODE','false closes registration; a code makes registration invite-only','rec','Backend','','you choose the code'],
+ ['b','Owner account','OWNER_EMAIL','The account that inherits pre-account data and may send real e-mail applications. Default: the first account','rec','Backend','','your own e-mail'],
+ ['b','Telegram bot name','TELEGRAM_BOT_USERNAME','Lets the Connect Telegram button make a direct link (optional; read from Telegram if unset)','opt','Backend','','@BotFather'],
  ['b','Admin key','ADMIN_API_KEY','Protects approve, skip, apply, set-webhook and tuning','rec','Backend','','a long random string'],
  ['b','E-mail (SMTP)','SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM','Sends applications by e-mail. Gmail needs an App Password','opt','Backend','Free with Gmail','myaccount.google.com'],
  ['b','Apply safety','APPLY_DRY_RUN, APPLY_DAILY_CAP','Dry run is on by default: nothing is sent','opt','Backend','',''],
@@ -869,6 +880,9 @@ function showView(v) {
   try { history.replaceState(null, '', v === 'keys' ? '#keys' : location.pathname + location.search); } catch (e) {}
 }
 $('#tab-flow').onclick = function () { showView('flow'); }; $('#tab-keys').onclick = function () { showView('keys'); };
+
+/* opened straight from a file (no website behind it): the Dashboard link has nowhere to go */
+if (location.protocol === 'file:') { var dash = $('#btn-app'); if (dash) dash.style.display = 'none'; }
 
 /* start */
 window.addEventListener('resize', function () { if (!tour.on && !sel) fitAll(0); });

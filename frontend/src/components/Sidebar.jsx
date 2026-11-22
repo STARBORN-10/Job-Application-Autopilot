@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Briefcase, ListTodo, Settings, Send, FileText, BarChart3, Inbox, Menu, X, Workflow } from 'lucide-react';
-import { usePipeline } from '../context/contexts';
+import { LayoutDashboard, Briefcase, ListTodo, Settings, Send, FileText, BarChart3, Inbox, Menu, X, Workflow, UserCircle, LogOut } from 'lucide-react';
+import { useAuth, usePipeline } from '../context/contexts';
 import { Spinner } from './Feedback';
 
 const LINKS = [
@@ -12,6 +12,7 @@ const LINKS = [
   ['/analytics', 'Analytics', BarChart3],
   ['/resumes', 'Resumes', FileText],
   ['/settings', 'Settings', Settings],
+  ['/profile', 'Profile', UserCircle],
 ];
 
 // Small always-visible indicator while a job search runs (on every page); links back to the live panel.
@@ -28,6 +29,7 @@ const RunIndicator = ({ onNavigate }) => {
 
 const Sidebar = () => {
   const [open, setOpen] = useState(false);
+  const { user, logout } = useAuth() || {};
   const close = () => setOpen(false);
   return (
     <nav className={`sidebar${open ? ' sidebar-open' : ''}`} aria-label="Main">
@@ -56,6 +58,18 @@ const Sidebar = () => {
           <span>Workflow map</span>
         </a>
       </div>
+      {user && (
+        <div className="sidebar-user">
+          <div className="avatar" aria-hidden="true">{(user.name || user.email || '?').trim().charAt(0).toUpperCase()}</div>
+          <div className="sidebar-user-text">
+            <div className="sidebar-user-name">{user.name || user.email.split('@')[0]}</div>
+            <div className="sidebar-user-mail" title={user.email}>{user.email}</div>
+          </div>
+          <button type="button" className="icon-btn signout-btn" onClick={() => { close(); logout(); }} aria-label="Sign out" title="Sign out">
+            <LogOut size={18} />
+          </button>
+        </div>
+      )}
     </nav>
   );
 };

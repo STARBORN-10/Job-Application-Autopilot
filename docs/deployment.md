@@ -58,6 +58,13 @@ This document outlines how to deploy the **Job Application Autopilot** stack (Fa
 | `TUNE_MIN_DECISIONS` | No | Decisions needed before weight tuning | `30` |
 | `AUTO_RUN_INTERVAL_MINUTES` | No | Built-in scheduler interval; `0`/unset disables (needs an always-on host) | `360` |
 | `RETRY_MAX_ATTEMPTS` / `RETRY_BASE_DELAY_SECONDS` | No | Retry tuning for transient API errors | `3` / `1.5` |
+| `AUTH_ENABLED` | No | `true` (default): people sign in and see only their own data. `false`: single-user mode, no login | `true` |
+| `AUTH_SECRET` | **Yes online** | Signs session tokens. Long random string. Without it everyone is signed out when the server's disk resets | `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `OWNER_EMAIL` | **Recommended** | The account that inherits existing data and may send real e-mail applications | `you@example.com` |
+| `SIGNUP_CODE` | Recommended | Invite code needed to create an account (keeps strangers off your API quotas) | any phrase |
+| `ALLOW_SIGNUP` | No | `false` closes registration | `true` |
+| `AUTH_TOKEN_DAYS` | No | How long a sign-in lasts | `7` |
+| `TELEGRAM_BOT_USERNAME` | No | Lets the Connect Telegram button build a direct link | `my_autopilot_bot` |
 | `MAKE_API_KEY` | Legacy | Only if an external tool still calls `POST /api/jobs` or `/api/make/*` | |
 | `PORT` | No | Server port (Render sets it) | `8000` |
 
@@ -80,7 +87,7 @@ This document outlines how to deploy the **Job Application Autopilot** stack (Fa
    - **Environment:** `Python 3`
    - **Build Command:** `pip install -r requirements.txt`
    - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-4. In the **Environment Variables** tab, add the keys from the table above. At minimum:
+4. In the **Environment Variables** tab, add the keys from the table above. At minimum (plus `AUTH_SECRET`, `OWNER_EMAIL`, `SIGNUP_CODE`):
    - `DATABASE_URL`: your PostgreSQL connection string (without it the free host loses its data on restart).
    - At least one AI key (`GEMINI_API_KEY` or `GROQ_API_KEY`) and at least one job source key
      (`RAPIDAPI_KEY`, or `ADZUNA_APP_ID` + `ADZUNA_APP_KEY`, or `JOOBLE_API_KEY`). Company boards and Amazon need none.
@@ -92,6 +99,22 @@ This document outlines how to deploy the **Job Application Autopilot** stack (Fa
 5. (Optional) In **Disks**, add a Persistent Disk mounted at `/opt/render/project/src/backend/uploads` with 1 GB storage.
 
 ---
+
+### Accounts: read this before the first deploy with accounts
+Accounts are on by default. The hosted database may already hold jobs and a resume from before accounts existed.
+**The first person to register (or the account whose e-mail equals `OWNER_EMAIL`) takes that data over.** So:
+
+1. Set `AUTH_SECRET`, `OWNER_EMAIL` (your e-mail) and `SIGNUP_CODE` on Render **before** deploying.
+2. Deploy, open the site, and register with the `OWNER_EMAIL` address first. You now own the existing data.
+3. Give the invite code only to people you want to let in. Everyone else gets an empty, private account.
+
+Things to know:
+- All users share the server's provider keys and quotas (JSearch's monthly budget, AI limits). That is why an invite code is recommended.
+- Real e-mail applications are only possible for the owner account (the server's SMTP account is the owner's). Others stay in dry run.
+- Each person connects their own Telegram chat from **Profile, Connect Telegram**; the bot and the webhook are shared.
+- Free hosts keep resume PDFs on a temporary disk. The text of each resume is in the database, so scoring keeps working; re-upload to restore the PDF.
+- To reset someone's password, run `python manage_users.py reset-password <email>` from a computer whose `DATABASE_URL` points at the hosted database (Render's free plan has no shell).
+- Migration `0004` adds the accounts tables and columns without removing anything. Back up first, as always.
 
 ### Database migrations (Alembic)
 The backend runs `alembic upgrade head` automatically at startup (with retries while the database is

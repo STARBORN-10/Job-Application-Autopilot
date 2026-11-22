@@ -107,8 +107,29 @@ Dashboard, Job Listings (filters incl. decision, compact score bars), Job Detail
 approve/skip), Applications (log, dry-run banner, copy cover letter), Tracker, Analytics, Resumes, Settings
 (hard filters, weights + tuning suggestion, source toggles with health, ATS company list, AI providers).
 
+### 10. Accounts and data isolation
+Every person has an account (`users` table; `backend/auth.py`, `backend/routes_auth.py`). A sign-in returns a signed
+JWT that the website sends with every request. `auth.authenticate` runs before every route (only a short, explicit
+public list is exempt) and scopes the request's database session to that user.
+
+- **Ownership:** `jobs`, `resumes`, `app_settings`, `job_decisions`, `applications`, `candidate_profiles` and
+  `tailored_resumes` carry a `user_id`. `backend/tenancy.py` adds `WHERE user_id = <user>` to every ORM query on them and
+  stamps new rows with the owner, so endpoints cannot forget to filter. A session with no user cannot read user data.
+  `source_health` and `api_usage` are shared on purpose (one provider key and quota).
+- **Legacy data:** rows with no owner (from before accounts) are taken over by the first account, or by `OWNER_EMAIL`.
+  `AUTH_ENABLED=false` keeps the old single-user mode (everything has no owner).
+- **Per-user run state:** the pipeline lock, live progress, last-run summary, trigger cooldown and background tasks are
+  keyed by user, so one person's search never blocks or appears on another's dashboard. The scheduler runs once per
+  user that has an active resume.
+- **Telegram:** one shared bot; each user links their own chat (Profile, Connect Telegram, `/start <code>`). Alerts go to
+  that chat and a tap can only act on that user's jobs. `TELEGRAM_CHAT_ID` serves the owner and single-user mode.
+- **Files:** resume PDFs are served only to their owner (`GET /api/resumes/{id}/file`); there is no public `/uploads`.
+- **E-mail applications** go through the server's SMTP account, so only the owner may send real ones.
+- **Tests:** `test_auth.py` covers the rules, every query style on every user table, and a sweep of all routes.
+
 ## Known limitations
-- Single user, no login. The trigger endpoint is open (rate limited only).
+- All users share the server's provider keys and quotas (JSearch budget, AI limits, SMTP). Use `SIGNUP_CODE` on a shared deployment.
+- No e-mail password reset: the server owner resets passwords with `python manage_users.py reset-password`.
 - Resume PDFs are stored on local disk; use a persistent disk in production.
 - Scraped sources (Internshala, JobSpy) may break or be blocked, especially from cloud IPs.
 - Gmail reply tracking and follow-up reminders are not built (see `docs/V2_PLAN.md`).

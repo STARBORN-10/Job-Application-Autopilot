@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ClipboardList, Download, ExternalLink, Image, MousePointerClick } from 'lucide-react';
-import { downloadTailoredResume, fetchJobTimeline, fetchTask, prefillApplication, screenshotUrl } from '../api';
+import { downloadTailoredResume, fetchJobTimeline, fetchTask, openFile, prefillApplication, screenshotUrl } from '../api';
 import { useToast } from '../context/contexts';
 import { CopyButton, ErrorState, Spinner } from './Feedback';
 import { APPLICATION_STATUS, METHOD_LABEL, atsFromUrl, formatDateTime } from '../lib/format';
@@ -8,6 +8,7 @@ import { APPLICATION_STATUS, METHOD_LABEL, atsFromUrl, formatDateTime } from '..
 export const ApplicationRecord = ({ a, job }) => {
   const { notify } = useToast();
   const [dl, setDl] = useState(false);
+  const [shot, setShot] = useState(false);
   const st = APPLICATION_STATUS[a.status] || { label: a.status, badge: 'badge-neutral' };
   const p = a.payload_summary || {};
   const link = p.form_url || job.url;
@@ -16,6 +17,13 @@ export const ApplicationRecord = ({ a, job }) => {
     try { await downloadTailoredResume(job.id, 'pdf'); } catch (err) {
       notify({ type: 'error', title: 'Download failed', message: err.message });
     } finally { setDl(false); }
+  };
+  // The screenshot is private to the signed-in user, so it is fetched with the sign-in token, not opened as a link.
+  const openShot = async () => {
+    setShot(true);
+    try { await openFile(screenshotUrl(a.screenshot_url)); } catch (err) {
+      notify({ type: 'error', title: 'Could not open the screenshot', message: err.message });
+    } finally { setShot(false); }
   };
   return (
     <div className="app-record">
@@ -57,9 +65,9 @@ export const ApplicationRecord = ({ a, job }) => {
           </button>
         )}
         {a.screenshot_url && (
-          <a href={screenshotUrl(a.screenshot_url)} target="_blank" rel="noopener noreferrer" className="btn btn-outline btn-sm">
-            <Image size={14} /> Screenshot of the filled form
-          </a>
+          <button type="button" className="btn btn-outline btn-sm" onClick={openShot} disabled={shot}>
+            {shot ? <Spinner size={13} /> : <Image size={14} />} Screenshot of the filled form
+          </button>
         )}
       </div>
     </div>

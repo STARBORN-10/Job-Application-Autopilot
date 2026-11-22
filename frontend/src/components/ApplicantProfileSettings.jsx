@@ -19,7 +19,7 @@ const FIELDS = [
 
 // Contact details used to pre-fill Greenhouse / Lever / Ashby forms. Visa, salary, EEO and other personal or
 // legal questions are deliberately not stored: the form filler leaves them for you.
-const ApplicantProfileSettings = () => {
+const ApplicantProfileSettings = ({ defaults = null }) => {
   const { notify } = useToast();
   const [profile, setProfile] = useState(null);
   const [config, setConfig] = useState(null);
@@ -30,9 +30,16 @@ const ApplicantProfileSettings = () => {
   useEffect(() => {
     let cancelled = false;
     Promise.all([fetchApplicantProfile(), fetchAutofillConfig().catch(() => null)])
-      .then(([p, c]) => { if (!cancelled) { setProfile(p); setConfig(c); setError(null); } })
+      .then(([p, c]) => {
+        if (cancelled) return;
+        // Empty fields start with the suggestions (the account's name and e-mail); they are saved only on Save.
+        const filled = { ...p };
+        Object.entries(defaults || {}).forEach(([k, v]) => { if (!filled[k] && v) filled[k] = v; });
+        setProfile(filled); setConfig(c); setError(null);
+      })
       .catch((err) => { if (!cancelled) setError(err.message); });
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reload]);
 
   const save = async (e) => {
