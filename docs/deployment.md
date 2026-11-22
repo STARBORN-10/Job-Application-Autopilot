@@ -80,10 +80,15 @@ This document outlines how to deploy the **Job Application Autopilot** stack (Fa
    - **Environment:** `Python 3`
    - **Build Command:** `pip install -r requirements.txt`
    - **Start Command:** `uvicorn main:app --host 0.0.0.0 --port $PORT`
-4. In the **Environment Variables** tab, add:
-   - `MAKE_API_KEY`: A strong random string.
-   - `DATABASE_URL`: Your PostgreSQL connection string.
-   - `CORS_ORIGINS`: Your frontend production domain.
+4. In the **Environment Variables** tab, add the keys from the table above. At minimum:
+   - `DATABASE_URL`: your PostgreSQL connection string (without it the free host loses its data on restart).
+   - At least one AI key (`GEMINI_API_KEY` or `GROQ_API_KEY`) and at least one job source key
+     (`RAPIDAPI_KEY`, or `ADZUNA_APP_ID` + `ADZUNA_APP_KEY`, or `JOOBLE_API_KEY`). Company boards and Amazon need none.
+   - `FRONTEND_URL`: your Vercel address (CORS). `CORS_ORIGINS` is optional; unset allows every origin.
+   - For Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_WEBHOOK_SECRET`, `PUBLIC_BACKEND_URL`.
+   - `ADMIN_API_KEY` (recommended) and, on Vercel, the same value as `VITE_ADMIN_API_KEY`.
+   - `MAKE_API_KEY` is deprecated and not needed.
+   Then upload your resume again on the live site: the hosted database is separate from your local one.
 5. (Optional) In **Disks**, add a Persistent Disk mounted at `/opt/render/project/src/backend/uploads` with 1 GB storage.
 
 ---

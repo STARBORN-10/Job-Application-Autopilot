@@ -27,6 +27,7 @@ The whole workflow runs **natively in the Python backend** (FastAPI + several jo
 - 📝 **Career-page form pre-fill:** for Greenhouse, Lever and Ashby postings a Playwright browser fills your details, uploads the resume, pastes the cover letter and takes a screenshot. It stops before Submit unless you explicitly enable submitting, leaves custom, legal and diversity questions to you, and hands over at a CAPTCHA.
 - ⏱️ **Live job search:** the Find New Jobs button opens a progress panel (fetch, merge, filter, score, save) with a row per source and a counter of new jobs; lists update as jobs arrive.
 - 📤 **Export:** download jobs as CSV, Excel or PDF.
+- 🗺️ **Workflow map:** `frontend/public/workflow.html` is an interactive, n8n-style map of the whole system (nodes, connections, sources, keys and where to set them, guided walkthrough). Open it from the sidebar ("Workflow map"), at `/workflow.html` on the running site, or by double-clicking the file.
 - 🗂️ **Application tracking:** To Apply through Offer/Rejected.
 
 > Applying only happens after you approve a job, and e-mail applications are dry-run until you set `APPLY_DRY_RUN=false`. Logged-in automation on LinkedIn, Naukri or Internshala is deliberately not supported.

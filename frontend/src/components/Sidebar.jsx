@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, NavLink } from 'react-router-dom';
-import { LayoutDashboard, Briefcase, ListTodo, Settings, Send, FileText, BarChart3, Inbox, Menu, X } from 'lucide-react';
+import { LayoutDashboard, Briefcase, ListTodo, Settings, Send, FileText, BarChart3, Inbox, Menu, X, Workflow } from 'lucide-react';
 import { usePipeline } from '../context/contexts';
 import { Spinner } from './Feedback';
 
@@ -50,6 +50,11 @@ const Sidebar = () => {
             <span>{label}</span>
           </NavLink>
         ))}
+        {/* Standalone page (public/workflow.html): an interactive map of how the whole system works. */}
+        <a className="nav-link" href="/workflow.html" target="_blank" rel="noopener" onClick={close}>
+          <Workflow size={20} aria-hidden="true" />
+          <span>Workflow map</span>
+        </a>
       </div>
     </nav>
   );
